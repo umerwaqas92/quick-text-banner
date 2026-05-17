@@ -12,7 +12,9 @@ import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityEvent.TYPE_VIEW_FOCUSED
 import android.view.accessibility.AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED
+import android.view.accessibility.AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
 import android.view.accessibility.AccessibilityEvent.TYPE_VIEW_CLICKED
+import android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
 import android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
 import android.view.accessibility.AccessibilityNodeInfo
 import org.json.JSONArray
@@ -30,6 +32,7 @@ class TextInjectorAccessibilityService : AccessibilityService() {
     private val autoBannerHandler = Handler(Looper.getMainLooper())
     private var pendingHideRunnable: Runnable? = null
     private var lastInputTriggerAt: Long = 0L
+    private var lastEditableDetectedAt: Long = 0L
     private var lastPackage: String = ""
     override fun onServiceConnected() {
         instance = this
@@ -40,33 +43,18 @@ class TextInjectorAccessibilityService : AccessibilityService() {
 
         val prefs = getSharedPreferences("quick_text_settings", MODE_PRIVATE)
         val autoEnabled = prefs.getBoolean("auto_banner_enabled", false)
-        if (!autoEnabled) return
+        val assistantEnabled = prefs.getBoolean("assistant_enabled", false)
+        if (!autoEnabled || !assistantEnabled) return
 
         val type = event.eventType
         val pkg = event.packageName?.toString().orEmpty()
         if (pkg.isEmpty()) return
 
-        val supportedPackages = setOf(
-            "com.zhiliaoapp.musically", // TikTok
-            "com.twitter.android", // X
-            "com.instagram.android",
-            "com.linkedin.android"
-        )
-
-        if (pkg !in supportedPackages) {
-            // switched away from supported apps -> hide
-            if (FloatingBannerService.isVisible()) {
-                val hide = Intent(this, FloatingBannerService::class.java).apply {
-                    action = FloatingBannerService.ACTION_HIDE
-                }
-                startService(hide)
-            }
-            return
-        }
-
         if (type != TYPE_VIEW_FOCUSED &&
             type != TYPE_VIEW_TEXT_SELECTION_CHANGED &&
+            type != TYPE_VIEW_TEXT_CHANGED &&
             type != TYPE_VIEW_CLICKED &&
+            type != TYPE_WINDOW_CONTENT_CHANGED &&
             type != TYPE_WINDOW_STATE_CHANGED
         ) {
             return
@@ -81,10 +69,13 @@ class TextInjectorAccessibilityService : AccessibilityService() {
         val looksLikeInputClass = className.contains("EditText", ignoreCase = true) ||
             className.contains("TextInput", ignoreCase = true)
 
-        val triggerShow = hasEditableFocus || sourceEditable || looksLikeInputClass
+        val isTextEvent = type == TYPE_VIEW_TEXT_CHANGED || type == TYPE_VIEW_TEXT_SELECTION_CHANGED
+        val triggerShow = hasEditableFocus || sourceEditable || looksLikeInputClass || (isTextEvent && source != null)
 
         if (triggerShow) {
-            lastInputTriggerAt = System.currentTimeMillis()
+            val now = System.currentTimeMillis()
+            lastInputTriggerAt = now
+            lastEditableDetectedAt = now
             pendingHideRunnable?.let { autoBannerHandler.removeCallbacks(it) }
             pendingHideRunnable = null
 
@@ -104,19 +95,27 @@ class TextInjectorAccessibilityService : AccessibilityService() {
                 startService(i)
             }
         } else {
+            if (type == TYPE_VIEW_TEXT_CHANGED) {
+                return
+            }
             pendingHideRunnable?.let { autoBannerHandler.removeCallbacks(it) }
             pendingHideRunnable = Runnable {
                 val currentFocused = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
                 val stillEditable = currentFocused?.isEditable == true
-                val recentlyTriggered = (System.currentTimeMillis() - lastInputTriggerAt) < 1400
-                if (!stillEditable && !recentlyTriggered && FloatingBannerService.isVisible()) {
+                val editableInTree = findFirstEditable(rootInActiveWindow) != null
+                val recentlyTriggered = (System.currentTimeMillis() - lastInputTriggerAt) < 1200
+                val recentlyEditableSeen = (System.currentTimeMillis() - lastEditableDetectedAt) < 1200
+                if ((stillEditable || editableInTree) && !recentlyTriggered) {
+                    lastEditableDetectedAt = System.currentTimeMillis()
+                }
+                if (!stillEditable && !editableInTree && !recentlyTriggered && !recentlyEditableSeen && FloatingBannerService.isVisible()) {
                     val i = Intent(this, FloatingBannerService::class.java).apply {
                         action = FloatingBannerService.ACTION_HIDE
                     }
                     startService(i)
                 }
             }
-            autoBannerHandler.postDelayed(pendingHideRunnable!!, 1200)
+            autoBannerHandler.postDelayed(pendingHideRunnable!!, 900)
         }
 
         lastPackage = pkg

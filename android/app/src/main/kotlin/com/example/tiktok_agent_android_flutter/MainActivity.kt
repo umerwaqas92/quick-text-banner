@@ -107,9 +107,21 @@ class MainActivity : FlutterActivity() {
                         result.success(true)
                     }
 
+                    "setAssistantEnabled" -> {
+                        val enabled = call.argument<Boolean>("enabled") ?: false
+                        val prefs = getSharedPreferences("quick_text_settings", MODE_PRIVATE)
+                        prefs.edit().putBoolean("assistant_enabled", enabled).apply()
+                        result.success(true)
+                    }
+
                     "getAutoBannerEnabled" -> {
                         val prefs = getSharedPreferences("quick_text_settings", MODE_PRIVATE)
                         result.success(prefs.getBoolean("auto_banner_enabled", false))
+                    }
+
+                    "getAssistantEnabled" -> {
+                        val prefs = getSharedPreferences("quick_text_settings", MODE_PRIVATE)
+                        result.success(prefs.getBoolean("assistant_enabled", false))
                     }
 
                     "getApiLogs" -> {

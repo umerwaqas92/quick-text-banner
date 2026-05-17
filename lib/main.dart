@@ -151,12 +151,14 @@ class _HomePageState extends State<HomePage> {
     final bool canOverlay = await _channel.invokeMethod<bool>('canDrawOverlays') ?? false;
     final bool accessibility = await _channel.invokeMethod<bool>('isAccessibilityEnabled') ?? false;
     final bool autoBanner = await _channel.invokeMethod<bool>('getAutoBannerEnabled') ?? false;
+    final bool assistantEnabled = await _channel.invokeMethod<bool>('getAssistantEnabled') ?? false;
 
     if (!mounted) return;
     setState(() {
       _canOverlay = canOverlay;
       _accessibilityOn = accessibility;
       _autoBannerEnabled = autoBanner;
+      _assistantOn = assistantEnabled;
     });
   }
 
@@ -169,6 +171,28 @@ class _HomePageState extends State<HomePage> {
     setState(() {
       _autoBannerEnabled = enabled;
     });
+
+    if (_assistantOn) {
+      if (enabled) {
+        await _channel.invokeMethod('hideOverlay');
+      } else {
+        await _channel.invokeMethod('showOverlay', <String, dynamic>{
+          'texts': <String>[],
+          'rows': _rows,
+          'compactMode': _compactMode,
+          'userPrompt': _aiExtraPromptController.text.trim(),
+          'platform': _platform,
+          'aiChipsEnabled': _aiChipsEnabled,
+          'categoryRows': _categoryRows,
+          'customActions': _customActions
+              .map((CustomAction a) => '${a.name}\t${a.prompt}')
+              .toList(),
+          'staticCategories': _staticCategories
+              .map((StaticCategory c) => '${c.name}\t${c.items.join('\u0001')}')
+              .toList(),
+        });
+      }
+    }
   }
 
   Future<void> _setAssistantEnabled(bool enabled) async {
@@ -190,26 +214,31 @@ class _HomePageState extends State<HomePage> {
       return;
     }
 
+    await _channel.invokeMethod('setAssistantEnabled', <String, dynamic>{
+      'enabled': enabled,
+    });
+
     if (enabled) {
-      if (_autoBannerEnabled) {
-        await _setAutoBannerEnabled(false);
-      }
       await _channel.invokeMethod('showToggle');
-      await _channel.invokeMethod('showOverlay', <String, dynamic>{
-        'texts': <String>[],
-        'rows': _rows,
-        'compactMode': _compactMode,
-        'userPrompt': _aiExtraPromptController.text.trim(),
-        'platform': _platform,
-        'aiChipsEnabled': _aiChipsEnabled,
-        'categoryRows': _categoryRows,
-        'customActions': _customActions
-            .map((CustomAction a) => '${a.name}\t${a.prompt}')
-            .toList(),
-        'staticCategories': _staticCategories
-            .map((StaticCategory c) => '${c.name}\t${c.items.join('\u0001')}')
-            .toList(),
-      });
+      if (_autoBannerEnabled) {
+        await _channel.invokeMethod('hideOverlay');
+      } else {
+        await _channel.invokeMethod('showOverlay', <String, dynamic>{
+          'texts': <String>[],
+          'rows': _rows,
+          'compactMode': _compactMode,
+          'userPrompt': _aiExtraPromptController.text.trim(),
+          'platform': _platform,
+          'aiChipsEnabled': _aiChipsEnabled,
+          'categoryRows': _categoryRows,
+          'customActions': _customActions
+              .map((CustomAction a) => '${a.name}\t${a.prompt}')
+              .toList(),
+          'staticCategories': _staticCategories
+              .map((StaticCategory c) => '${c.name}\t${c.items.join('\u0001')}')
+              .toList(),
+        });
+      }
     } else {
       await _channel.invokeMethod('hideOverlay');
       await _channel.invokeMethod('hideToggle');
