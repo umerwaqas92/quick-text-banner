@@ -54,7 +54,9 @@ class OverlayToggleService : Service() {
                 if (action == FloatingBannerService.ACTION_SHOW) {
                     val prefs = getSharedPreferences("quick_text_settings", MODE_PRIVATE)
                     val savedRows = prefs.getInt("rows", 2).coerceIn(1, 4)
+                    val savedCategoryRows = prefs.getInt("category_rows", 1).coerceIn(1, 3)
                     val savedCompact = prefs.getBoolean("compact_mode", false)
+                    val savedAiChipsEnabled = prefs.getBoolean("ai_chips_enabled", true)
                     val savedPrompt = prefs.getString("extra_prompt", "").orEmpty()
                     val savedPlatform = prefs.getString("platform", "TikTok").orEmpty()
                     val savedCustom = prefs.getStringSet("custom_actions", emptySet())?.toList() ?: emptyList()
@@ -84,6 +86,14 @@ class OverlayToggleService : Service() {
                     i.putExtra(
                         FloatingBannerService.EXTRA_PLATFORM,
                         if (FloatingBannerService.lastPlatform.isNotBlank()) FloatingBannerService.lastPlatform else savedPlatform
+                    )
+                    i.putExtra(
+                        FloatingBannerService.EXTRA_AI_CHIPS_ENABLED,
+                        if (FloatingBannerService.lastRows > 0) FloatingBannerService.lastAiChipsEnabled else savedAiChipsEnabled
+                    )
+                    i.putExtra(
+                        FloatingBannerService.EXTRA_CATEGORY_ROWS,
+                        if (FloatingBannerService.lastCategoryRows > 0) FloatingBannerService.lastCategoryRows else savedCategoryRows
                     )
                     i.putStringArrayListExtra(FloatingBannerService.EXTRA_CUSTOM_ACTIONS, ArrayList(customActions))
                     i.putStringArrayListExtra(FloatingBannerService.EXTRA_STATIC_CATEGORIES, ArrayList(staticCategories))

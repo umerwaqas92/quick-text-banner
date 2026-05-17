@@ -66,6 +66,8 @@ class _HomePageState extends State<HomePage> {
   bool _accessibilityOn = false;
   bool _compactMode = false;
   int _rows = 2;
+  int _categoryRows = 1;
+  bool _aiChipsEnabled = true;
   String _platform = 'TikTok';
   bool _autoBannerEnabled = false;
 
@@ -80,7 +82,9 @@ class _HomePageState extends State<HomePage> {
   Future<void> _loadLocalState() async {
     final prefs = await SharedPreferences.getInstance();
     final rows = prefs.getInt('rows') ?? 2;
+    final categoryRows = prefs.getInt('category_rows') ?? 1;
     final compact = prefs.getBool('compact_mode') ?? false;
+    final aiChipsEnabled = prefs.getBool('ai_chips_enabled') ?? true;
     final platform = prefs.getString('platform') ?? 'TikTok';
     final extraPrompt = prefs.getString('extra_prompt') ?? '';
     final customRaw = prefs.getStringList('custom_actions') ?? <String>[];
@@ -107,7 +111,9 @@ class _HomePageState extends State<HomePage> {
     if (!mounted) return;
     setState(() {
       _rows = rows.clamp(1, 4);
+      _categoryRows = categoryRows.clamp(1, 3);
       _compactMode = compact;
+      _aiChipsEnabled = aiChipsEnabled;
       _platform = platform;
       _aiExtraPromptController.text = extraPrompt;
       _customActions
@@ -123,7 +129,9 @@ class _HomePageState extends State<HomePage> {
   Future<void> _saveLocalState() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt('rows', _rows);
+    await prefs.setInt('category_rows', _categoryRows);
     await prefs.setBool('compact_mode', _compactMode);
+    await prefs.setBool('ai_chips_enabled', _aiChipsEnabled);
     await prefs.setString('platform', _platform);
     await prefs.setString('extra_prompt', _aiExtraPromptController.text.trim());
     await prefs.setBool('auto_banner_enabled_local', _autoBannerEnabled);
@@ -193,6 +201,8 @@ class _HomePageState extends State<HomePage> {
         'compactMode': _compactMode,
         'userPrompt': _aiExtraPromptController.text.trim(),
         'platform': _platform,
+        'aiChipsEnabled': _aiChipsEnabled,
+        'categoryRows': _categoryRows,
         'customActions': _customActions
             .map((CustomAction a) => '${a.name}\t${a.prompt}')
             .toList(),
@@ -223,6 +233,8 @@ class _HomePageState extends State<HomePage> {
       'compactMode': _compactMode,
       'userPrompt': _aiExtraPromptController.text.trim(),
       'platform': _platform,
+      'aiChipsEnabled': _aiChipsEnabled,
+      'categoryRows': _categoryRows,
       'customActions': _customActions
           .map((CustomAction a) => '${a.name}\t${a.prompt}')
           .toList(),
@@ -473,6 +485,19 @@ class _HomePageState extends State<HomePage> {
                 value: _assistantOn,
                 onChanged: _setAssistantEnabled,
               ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Enable AI Chips'),
+                subtitle: const Text('Show/hide AI style/action chips in banner'),
+                value: _aiChipsEnabled,
+                onChanged: (bool value) {
+                  setState(() {
+                    _aiChipsEnabled = value;
+                    _saveLocalState();
+                  });
+                  _refreshBannerIfVisible();
+                },
+              ),
               const SizedBox(height: 12),
               TextField(
                 controller: _aiExtraPromptController,
@@ -540,6 +565,25 @@ class _HomePageState extends State<HomePage> {
                       if (value == null) return;
                       setState(() {
                         _compactMode = value;
+                        _saveLocalState();
+                      });
+                      _refreshBannerIfVisible();
+                    },
+                  ),
+                  const SizedBox(width: 16),
+                  const Text('Cat rows:'),
+                  const SizedBox(width: 8),
+                  DropdownButton<int>(
+                    value: _categoryRows,
+                    items: const <DropdownMenuItem<int>>[
+                      DropdownMenuItem(value: 1, child: Text('1')),
+                      DropdownMenuItem(value: 2, child: Text('2')),
+                      DropdownMenuItem(value: 3, child: Text('3')),
+                    ],
+                    onChanged: (int? value) {
+                      if (value == null) return;
+                      setState(() {
+                        _categoryRows = value;
                         _saveLocalState();
                       });
                       _refreshBannerIfVisible();

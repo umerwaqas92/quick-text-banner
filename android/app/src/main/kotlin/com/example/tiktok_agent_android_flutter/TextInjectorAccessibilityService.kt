@@ -96,6 +96,8 @@ class TextInjectorAccessibilityService : AccessibilityService() {
                     putExtra(FloatingBannerService.EXTRA_COMPACT_MODE, FloatingBannerService.lastCompactMode)
                     putExtra(FloatingBannerService.EXTRA_USER_PROMPT, FloatingBannerService.lastUserPrompt)
                     putExtra(FloatingBannerService.EXTRA_PLATFORM, FloatingBannerService.lastPlatform)
+                    putExtra(FloatingBannerService.EXTRA_AI_CHIPS_ENABLED, FloatingBannerService.lastAiChipsEnabled)
+                    putExtra(FloatingBannerService.EXTRA_CATEGORY_ROWS, FloatingBannerService.lastCategoryRows)
                     putStringArrayListExtra(FloatingBannerService.EXTRA_CUSTOM_ACTIONS, ArrayList(FloatingBannerService.lastCustomActions))
                     putStringArrayListExtra(FloatingBannerService.EXTRA_STATIC_CATEGORIES, ArrayList(FloatingBannerService.lastStaticCategories))
                 }

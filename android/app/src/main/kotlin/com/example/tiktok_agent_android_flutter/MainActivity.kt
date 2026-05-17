@@ -39,6 +39,8 @@ class MainActivity : FlutterActivity() {
                         val compactMode = call.argument<Boolean>("compactMode") ?: false
                         val userPrompt = call.argument<String>("userPrompt") ?: ""
                         val platform = call.argument<String>("platform") ?: "TikTok"
+                        val aiChipsEnabled = call.argument<Boolean>("aiChipsEnabled") ?: true
+                        val categoryRows = call.argument<Int>("categoryRows") ?: 1
                         @Suppress("UNCHECKED_CAST")
                         val customActions = call.argument<List<String>>("customActions") ?: emptyList()
                         @Suppress("UNCHECKED_CAST")
@@ -50,6 +52,8 @@ class MainActivity : FlutterActivity() {
                             putExtra(FloatingBannerService.EXTRA_COMPACT_MODE, compactMode)
                             putExtra(FloatingBannerService.EXTRA_USER_PROMPT, userPrompt)
                             putExtra(FloatingBannerService.EXTRA_PLATFORM, platform)
+                            putExtra(FloatingBannerService.EXTRA_AI_CHIPS_ENABLED, aiChipsEnabled)
+                            putExtra(FloatingBannerService.EXTRA_CATEGORY_ROWS, categoryRows)
                             putStringArrayListExtra(FloatingBannerService.EXTRA_CUSTOM_ACTIONS, ArrayList(customActions))
                             putStringArrayListExtra(FloatingBannerService.EXTRA_STATIC_CATEGORIES, ArrayList(staticCategories))
                         }

@@ -32,6 +32,8 @@ class FloatingBannerService : Service() {
     private var isGenerating: Boolean = false
     private var userPrompt: String = ""
     private var platform: String = "TikTok"
+    private var aiChipsEnabled: Boolean = true
+    private var categoryRows: Int = 1
     private var customActions: List<Pair<String, String>> = emptyList()
     private var staticCategories: List<StaticCategory> = emptyList()
 
@@ -45,6 +47,8 @@ class FloatingBannerService : Service() {
                 val compactMode = intent.getBooleanExtra(EXTRA_COMPACT_MODE, false)
                 userPrompt = intent.getStringExtra(EXTRA_USER_PROMPT).orEmpty().trim()
                 platform = intent.getStringExtra(EXTRA_PLATFORM) ?: "TikTok"
+                aiChipsEnabled = intent.getBooleanExtra(EXTRA_AI_CHIPS_ENABLED, true)
+                categoryRows = intent.getIntExtra(EXTRA_CATEGORY_ROWS, 1).coerceIn(1, 3)
                 val rawCustom = intent.getStringArrayListExtra(EXTRA_CUSTOM_ACTIONS) ?: arrayListOf()
                 customActions = rawCustom.mapNotNull { line ->
                     val parts = line.split("\t", limit = 2)
@@ -84,6 +88,8 @@ class FloatingBannerService : Service() {
         lastCompactMode = compactMode
         lastUserPrompt = userPrompt
         lastPlatform = platform
+        lastAiChipsEnabled = aiChipsEnabled
+        lastCategoryRows = categoryRows
         lastCustomActions = customActions.map { "${it.first}\t${it.second}" }
         lastStaticCategories = staticCategories.map { "${it.name}\t${it.items.joinToString("\u0001")}" }
 
@@ -107,54 +113,57 @@ class FloatingBannerService : Service() {
             orientation = LinearLayout.VERTICAL
         }
 
-        val aiRowTop = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val aiRowBottom = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        if (aiChipsEnabled) {
+            val aiRowTop = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            val aiRowBottom = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
 
-        val aiRowsContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-
-        val aiScroll = HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = true
-            overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
-            val lp = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            )
-            lp.bottomMargin = 8
-            layoutParams = lp
-        }
-
-        statusView = createActionChip("Ready") { }
-        statusView?.setBackgroundColor(Color.parseColor("#455A64"))
-
-        val completeChip = createActionChip("🧩 Complete Reply") {
-            runDraftCompletionAction()
-        }
-        completeChip.setBackgroundColor(Color.parseColor("#6A1B9A"))
-        aiRowTop.addView(completeChip, 0)
-
-        customActions.forEachIndexed { idx, action ->
-            val customChip = createActionChip("➕ ${action.first}") {
-                runCustomCompletionAction(action.second)
+            val aiRowsContainer = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
             }
-            customChip.setBackgroundColor(Color.parseColor("#455A64"))
-            if (idx % 2 == 0) aiRowTop.addView(customChip) else aiRowBottom.addView(customChip)
-        }
 
-        val styles = getStylesForPlatform(platform)
-
-        styles.forEachIndexed { index, (label, instruction) ->
-            val chip = createActionChip(label) {
-                runAiAction(instruction)
+            val aiScroll = HorizontalScrollView(this).apply {
+                isHorizontalScrollBarEnabled = true
+                overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+                val lp = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+                lp.bottomMargin = 8
+                layoutParams = lp
             }
-            if (index % 2 == 0) aiRowTop.addView(chip) else aiRowBottom.addView(chip)
+
+            statusView = createActionChip("Ready") { }
+            statusView?.setBackgroundColor(Color.parseColor("#455A64"))
+
+            val completeChip = createActionChip("🧩 Complete Reply") {
+                runDraftCompletionAction()
+            }
+            completeChip.setBackgroundColor(Color.parseColor("#6A1B9A"))
+            aiRowTop.addView(completeChip, 0)
+
+            customActions.forEachIndexed { idx, action ->
+                val customChip = createActionChip("➕ ${action.first}") {
+                    runCustomCompletionAction(action.second)
+                }
+                customChip.setBackgroundColor(Color.parseColor("#455A64"))
+                if (idx % 2 == 0) aiRowTop.addView(customChip) else aiRowBottom.addView(customChip)
+            }
+
+            val styles = getStylesForPlatform(platform)
+            styles.forEachIndexed { index, (label, instruction) ->
+                val chip = createActionChip(label) {
+                    runAiAction(instruction)
+                }
+                if (index % 2 == 0) aiRowTop.addView(chip) else aiRowBottom.addView(chip)
+            }
+            statusView?.let { aiRowTop.addView(it) }
+            aiRowsContainer.addView(aiRowTop)
+            aiRowsContainer.addView(aiRowBottom)
+            aiScroll.addView(aiRowsContainer)
+            container.addView(aiScroll)
+        } else {
+            statusView = null
         }
-        statusView?.let { aiRowTop.addView(it) }
-        aiRowsContainer.addView(aiRowTop)
-        aiRowsContainer.addView(aiRowBottom)
-        aiScroll.addView(aiRowsContainer)
-        container.addView(aiScroll)
 
         val horizontalScroll = HorizontalScrollView(this).apply {
             isHorizontalScrollBarEnabled = true
@@ -164,7 +173,21 @@ class FloatingBannerService : Service() {
             isHorizontalScrollBarEnabled = true
             overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
         }
-        val categoryRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val categoryRowViews = (0 until categoryRows).map {
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                val lp = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                )
+                lp.bottomMargin = if (it == categoryRows - 1) 0 else 8
+                layoutParams = lp
+            }
+        }
+        val categoryColumn = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            categoryRowViews.forEach { addView(it) }
+        }
         val staticContentContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
         val rowViews = (0 until rows).map {
@@ -241,10 +264,17 @@ class FloatingBannerService : Service() {
                     populateStaticTextRows(category.items)
                 }
                 categoryChips.add(categoryChip)
-                categoryRow.addView(categoryChip)
+            }
+            val categoryColumns = ceil(staticCategories.size / categoryRows.toDouble()).toInt().coerceAtLeast(1)
+            for (col in 0 until categoryColumns) {
+                for (row in 0 until categoryRows) {
+                    val idx = col * categoryRows + row
+                    if (idx >= categoryChips.size) continue
+                    categoryRowViews[row].addView(categoryChips[idx])
+                }
             }
             refreshCategorySelection()
-            categoryScroll.addView(categoryRow)
+            categoryScroll.addView(categoryColumn)
             val lp = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
@@ -487,6 +517,8 @@ class FloatingBannerService : Service() {
         var lastCompactMode: Boolean = false
         var lastUserPrompt: String = ""
         var lastPlatform: String = "TikTok"
+        var lastAiChipsEnabled: Boolean = true
+        var lastCategoryRows: Int = 1
         var lastCustomActions: List<String> = emptyList()
         var lastStaticCategories: List<String> = emptyList()
 
@@ -499,6 +531,8 @@ class FloatingBannerService : Service() {
         const val EXTRA_COMPACT_MODE = "compactMode"
         const val EXTRA_USER_PROMPT = "userPrompt"
         const val EXTRA_PLATFORM = "platform"
+        const val EXTRA_AI_CHIPS_ENABLED = "aiChipsEnabled"
+        const val EXTRA_CATEGORY_ROWS = "categoryRows"
         const val EXTRA_CUSTOM_ACTIONS = "customActions"
         const val EXTRA_STATIC_CATEGORIES = "staticCategories"
     }
