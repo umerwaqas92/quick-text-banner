@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -51,12 +52,42 @@ class OverlayToggleService : Service() {
                 val i = Intent(this@OverlayToggleService, FloatingBannerService::class.java)
                 i.action = action
                 if (action == FloatingBannerService.ACTION_SHOW) {
+                    val prefs = getSharedPreferences("quick_text_settings", MODE_PRIVATE)
+                    val savedRows = prefs.getInt("rows", 2).coerceIn(1, 4)
+                    val savedCompact = prefs.getBoolean("compact_mode", false)
+                    val savedPrompt = prefs.getString("extra_prompt", "").orEmpty()
+                    val savedPlatform = prefs.getString("platform", "TikTok").orEmpty()
+                    val savedCustom = prefs.getStringSet("custom_actions", emptySet())?.toList() ?: emptyList()
+                    val savedStatic = prefs.getStringSet("static_categories", emptySet())?.toList() ?: emptyList()
+
+                    val staticCategories = if (FloatingBannerService.lastStaticCategories.isNotEmpty()) {
+                        FloatingBannerService.lastStaticCategories
+                    } else {
+                        savedStatic
+                    }
+                    val customActions = if (FloatingBannerService.lastCustomActions.isNotEmpty()) {
+                        FloatingBannerService.lastCustomActions
+                    } else {
+                        savedCustom
+                    }
+
                     i.putStringArrayListExtra(FloatingBannerService.EXTRA_TEXTS, ArrayList(FloatingBannerService.lastTexts))
-                    i.putExtra(FloatingBannerService.EXTRA_ROWS, FloatingBannerService.lastRows)
-                    i.putExtra(FloatingBannerService.EXTRA_COMPACT_MODE, FloatingBannerService.lastCompactMode)
-                    i.putExtra(FloatingBannerService.EXTRA_USER_PROMPT, FloatingBannerService.lastUserPrompt)
-                    i.putExtra(FloatingBannerService.EXTRA_PLATFORM, FloatingBannerService.lastPlatform)
-                    i.putStringArrayListExtra(FloatingBannerService.EXTRA_CUSTOM_ACTIONS, ArrayList(FloatingBannerService.lastCustomActions))
+                    i.putExtra(FloatingBannerService.EXTRA_ROWS, if (FloatingBannerService.lastRows > 0) FloatingBannerService.lastRows else savedRows)
+                    i.putExtra(
+                        FloatingBannerService.EXTRA_COMPACT_MODE,
+                        if (FloatingBannerService.lastRows > 0) FloatingBannerService.lastCompactMode else savedCompact
+                    )
+                    i.putExtra(
+                        FloatingBannerService.EXTRA_USER_PROMPT,
+                        if (FloatingBannerService.lastUserPrompt.isNotBlank()) FloatingBannerService.lastUserPrompt else savedPrompt
+                    )
+                    i.putExtra(
+                        FloatingBannerService.EXTRA_PLATFORM,
+                        if (FloatingBannerService.lastPlatform.isNotBlank()) FloatingBannerService.lastPlatform else savedPlatform
+                    )
+                    i.putStringArrayListExtra(FloatingBannerService.EXTRA_CUSTOM_ACTIONS, ArrayList(customActions))
+                    i.putStringArrayListExtra(FloatingBannerService.EXTRA_STATIC_CATEGORIES, ArrayList(staticCategories))
+                    Log.d("OverlayToggleService", "FAB SHOW clicked: categories=${staticCategories.size}")
                 }
                 startService(i)
             }

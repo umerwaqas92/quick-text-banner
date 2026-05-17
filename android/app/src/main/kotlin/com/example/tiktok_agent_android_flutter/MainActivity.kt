@@ -41,6 +41,8 @@ class MainActivity : FlutterActivity() {
                         val platform = call.argument<String>("platform") ?: "TikTok"
                         @Suppress("UNCHECKED_CAST")
                         val customActions = call.argument<List<String>>("customActions") ?: emptyList()
+                        @Suppress("UNCHECKED_CAST")
+                        val staticCategories = call.argument<List<String>>("staticCategories") ?: emptyList()
                         val intent = Intent(this, FloatingBannerService::class.java).apply {
                             action = FloatingBannerService.ACTION_SHOW
                             putStringArrayListExtra(FloatingBannerService.EXTRA_TEXTS, ArrayList(texts))
@@ -49,6 +51,7 @@ class MainActivity : FlutterActivity() {
                             putExtra(FloatingBannerService.EXTRA_USER_PROMPT, userPrompt)
                             putExtra(FloatingBannerService.EXTRA_PLATFORM, platform)
                             putStringArrayListExtra(FloatingBannerService.EXTRA_CUSTOM_ACTIONS, ArrayList(customActions))
+                            putStringArrayListExtra(FloatingBannerService.EXTRA_STATIC_CATEGORIES, ArrayList(staticCategories))
                         }
                         startService(intent)
                         result.success(true)

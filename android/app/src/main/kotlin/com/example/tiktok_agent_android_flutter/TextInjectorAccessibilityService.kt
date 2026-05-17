@@ -97,6 +97,7 @@ class TextInjectorAccessibilityService : AccessibilityService() {
                     putExtra(FloatingBannerService.EXTRA_USER_PROMPT, FloatingBannerService.lastUserPrompt)
                     putExtra(FloatingBannerService.EXTRA_PLATFORM, FloatingBannerService.lastPlatform)
                     putStringArrayListExtra(FloatingBannerService.EXTRA_CUSTOM_ACTIONS, ArrayList(FloatingBannerService.lastCustomActions))
+                    putStringArrayListExtra(FloatingBannerService.EXTRA_STATIC_CATEGORIES, ArrayList(FloatingBannerService.lastStaticCategories))
                 }
                 startService(i)
             }
@@ -350,6 +351,7 @@ $context
 
         fun generateAiReplyAndInject(instruction: String): Boolean {
             val svc = instance ?: return false
+            if (HARD_CODED_OPENROUTER_KEY.isBlank()) return false
             Log.d(TAG, "Instruction= $instruction")
             val reply = svc.generateReplyFromOpenRouter(HARD_CODED_OPENROUTER_KEY, instruction) ?: return false
             Log.d(TAG, "Generated reply= $reply")
@@ -358,6 +360,7 @@ $context
 
         fun generateCompletionFromActiveInputAndInject(extraUserPrompt: String): Boolean {
             val svc = instance ?: return false
+            if (HARD_CODED_OPENROUTER_KEY.isBlank()) return false
             val draft = svc.getFocusedOrFirstEditableText()
             if (draft.isBlank()) return false
 

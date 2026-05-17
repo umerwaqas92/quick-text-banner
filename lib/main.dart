@@ -32,6 +32,13 @@ class CustomAction {
   final String prompt;
 }
 
+class StaticCategory {
+  StaticCategory({required this.name, required this.items});
+
+  final String name;
+  final List<String> items;
+}
+
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -46,11 +53,15 @@ class _HomePageState extends State<HomePage> {
   final TextEditingController _aiExtraPromptController = TextEditingController();
   final TextEditingController _customNameController = TextEditingController();
   final TextEditingController _customPromptController = TextEditingController();
-  final List<String> _texts = <String>['Hello', 'Thank you', 'Please send details'];
+  final TextEditingController _categoryNameController = TextEditingController();
+  final TextEditingController _categoryItemsController = TextEditingController();
+  final TextEditingController _categoryBulkController = TextEditingController();
+  final TextEditingController _categoryJsonController = TextEditingController();
   final List<CustomAction> _customActions = <CustomAction>[];
+  final List<StaticCategory> _staticCategories = <StaticCategory>[];
+  int _pageIndex = 0;
 
-  bool _overlayOn = false;
-  bool _toggleOn = false;
+  bool _assistantOn = false;
   bool _canOverlay = false;
   bool _accessibilityOn = false;
   bool _compactMode = false;
@@ -68,12 +79,12 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _loadLocalState() async {
     final prefs = await SharedPreferences.getInstance();
-    final texts = prefs.getStringList('quick_texts') ?? <String>[];
     final rows = prefs.getInt('rows') ?? 2;
     final compact = prefs.getBool('compact_mode') ?? false;
     final platform = prefs.getString('platform') ?? 'TikTok';
     final extraPrompt = prefs.getString('extra_prompt') ?? '';
     final customRaw = prefs.getStringList('custom_actions') ?? <String>[];
+    final categoriesRaw = prefs.getStringList('static_categories') ?? <String>[];
     final localAuto = prefs.getBool('auto_banner_enabled_local') ?? false;
 
     final parsed = customRaw.map((String line) {
@@ -81,14 +92,20 @@ class _HomePageState extends State<HomePage> {
       if (parts.length < 2) return null;
       return CustomAction(name: parts.first, prompt: parts.sublist(1).join('	'));
     }).whereType<CustomAction>().toList();
+    final parsedCategories = categoriesRaw.map((String line) {
+      final parts = line.split('\t');
+      if (parts.length < 2) return null;
+      final items = parts[1]
+          .split('\u0001')
+          .map((String e) => e.trim())
+          .where((String e) => e.isNotEmpty)
+          .toList();
+      if (items.isEmpty || parts[0].trim().isEmpty) return null;
+      return StaticCategory(name: parts[0].trim(), items: items);
+    }).whereType<StaticCategory>().toList();
 
     if (!mounted) return;
     setState(() {
-      if (texts.isNotEmpty) {
-        _texts
-          ..clear()
-          ..addAll(texts);
-      }
       _rows = rows.clamp(1, 4);
       _compactMode = compact;
       _platform = platform;
@@ -96,13 +113,15 @@ class _HomePageState extends State<HomePage> {
       _customActions
         ..clear()
         ..addAll(parsed);
+      _staticCategories
+        ..clear()
+        ..addAll(parsedCategories);
       _autoBannerEnabled = localAuto;
     });
   }
 
   Future<void> _saveLocalState() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList('quick_texts', _texts);
     await prefs.setInt('rows', _rows);
     await prefs.setBool('compact_mode', _compactMode);
     await prefs.setString('platform', _platform);
@@ -111,6 +130,12 @@ class _HomePageState extends State<HomePage> {
     await prefs.setStringList(
       'custom_actions',
       _customActions.map((CustomAction a) => '${a.name}	${a.prompt}').toList(),
+    );
+    await prefs.setStringList(
+      'static_categories',
+      _staticCategories
+          .map((StaticCategory c) => '${c.name}\t${c.items.join('\u0001')}')
+          .toList(),
     );
   }
 
@@ -138,33 +163,32 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
-  Future<void> _toggleBanner() async {
-    if (_texts.isEmpty) {
+  Future<void> _setAssistantEnabled(bool enabled) async {
+    if (enabled && _staticCategories.isEmpty) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Add at least one text chip first.')),
+        const SnackBar(content: Text('Add at least one category first.')),
       );
       return;
     }
 
-    if (!_canOverlay) {
+    if (enabled && !_canOverlay) {
       await _channel.invokeMethod('openOverlaySettings');
       return;
     }
 
-    if (!_accessibilityOn) {
+    if (enabled && !_accessibilityOn) {
       await _channel.invokeMethod('openAccessibilitySettings');
       return;
     }
 
-    final bool actuallyVisible =
-        await _channel.invokeMethod<bool>('isBannerVisible') ?? false;
-
-    if (actuallyVisible) {
-      await _channel.invokeMethod('hideOverlay');
-    } else {
+    if (enabled) {
+      if (_autoBannerEnabled) {
+        await _setAutoBannerEnabled(false);
+      }
+      await _channel.invokeMethod('showToggle');
       await _channel.invokeMethod('showOverlay', <String, dynamic>{
-        'texts': _texts,
+        'texts': <String>[],
         'rows': _rows,
         'compactMode': _compactMode,
         'userPrompt': _aiExtraPromptController.text.trim(),
@@ -172,31 +196,18 @@ class _HomePageState extends State<HomePage> {
         'customActions': _customActions
             .map((CustomAction a) => '${a.name}\t${a.prompt}')
             .toList(),
+        'staticCategories': _staticCategories
+            .map((StaticCategory c) => '${c.name}\t${c.items.join('\u0001')}')
+            .toList(),
       });
-    }
-
-    if (!mounted) return;
-    setState(() {
-      _overlayOn = !actuallyVisible;
-    });
-  }
-
-
-  Future<void> _toggleFloatingButton() async {
-    if (!_canOverlay) {
-      await _channel.invokeMethod('openOverlaySettings');
-      return;
-    }
-
-    if (_toggleOn) {
-      await _channel.invokeMethod('hideToggle');
     } else {
-      await _channel.invokeMethod('showToggle');
+      await _channel.invokeMethod('hideOverlay');
+      await _channel.invokeMethod('hideToggle');
     }
 
     if (!mounted) return;
     setState(() {
-      _toggleOn = !_toggleOn;
+      _assistantOn = enabled;
     });
   }
 
@@ -207,7 +218,7 @@ class _HomePageState extends State<HomePage> {
     if (!visible) return;
 
     await _channel.invokeMethod('showOverlay', <String, dynamic>{
-      'texts': _texts,
+      'texts': <String>[],
       'rows': _rows,
       'compactMode': _compactMode,
       'userPrompt': _aiExtraPromptController.text.trim(),
@@ -215,33 +226,16 @@ class _HomePageState extends State<HomePage> {
       'customActions': _customActions
           .map((CustomAction a) => '${a.name}\t${a.prompt}')
           .toList(),
+      'staticCategories': _staticCategories
+          .map((StaticCategory c) => '${c.name}\t${c.items.join('\u0001')}')
+          .toList(),
     });
 
     if (!mounted) return;
     setState(() {
-      _overlayOn = true;
+      _assistantOn = true;
     });
   }
-
-  void _addTextsFromInput() {
-    final String raw = _inputController.text.trim();
-    if (raw.isEmpty) return;
-
-    final List<String> parts = raw
-        .split(',')
-        .map((String e) => e.trim())
-        .where((String e) => e.isNotEmpty)
-        .toList();
-
-    if (parts.isEmpty) return;
-
-    setState(() {
-      _texts.addAll(parts);
-      _inputController.clear();
-      _saveLocalState();
-    });
-  }
-
 
   void _addCustomAction() {
     final String name = _customNameController.text.trim();
@@ -264,11 +258,135 @@ class _HomePageState extends State<HomePage> {
     _refreshBannerIfVisible();
   }
 
-  void _removeAt(int index) {
+  void _addStaticCategory() {
+    final String name = _categoryNameController.text.trim();
+    final List<String> items = _categoryItemsController.text
+        .split(',')
+        .map((String e) => e.trim())
+        .where((String e) => e.isNotEmpty)
+        .toList();
+    if (name.isEmpty || items.isEmpty) return;
     setState(() {
-      _texts.removeAt(index);
+      _staticCategories.add(StaticCategory(name: name, items: items));
+      _categoryNameController.clear();
+      _categoryItemsController.clear();
       _saveLocalState();
     });
+    _refreshBannerIfVisible();
+  }
+
+  void _addStaticCategoriesFromBulk() {
+    final String raw = _categoryBulkController.text.trim();
+    if (raw.isEmpty) return;
+
+    final List<String> tokens = raw
+        .split(',')
+        .map((String e) => e.trim())
+        .where((String e) => e.isNotEmpty)
+        .toList();
+    if (tokens.isEmpty) return;
+
+    final List<StaticCategory> parsed = <StaticCategory>[];
+    String? currentName;
+    final List<String> currentItems = <String>[];
+
+    void flushCurrent() {
+      if (currentName == null) return;
+      final items = currentItems.where((String e) => e.isNotEmpty).toList();
+      if (items.isNotEmpty) {
+        parsed.add(StaticCategory(name: currentName!, items: items));
+      }
+    }
+
+    for (final token in tokens) {
+      final int colonIndex = token.indexOf(':');
+      if (colonIndex > 0) {
+        flushCurrent();
+        currentItems.clear();
+        currentName = token.substring(0, colonIndex).trim();
+        final String firstItem = token.substring(colonIndex + 1).trim();
+        if (firstItem.isNotEmpty) {
+          currentItems.add(firstItem);
+        }
+      } else if (currentName != null) {
+        currentItems.add(token);
+      }
+    }
+    flushCurrent();
+
+    if (parsed.isEmpty) return;
+    setState(() {
+      _staticCategories.addAll(parsed);
+      _categoryBulkController.clear();
+      _saveLocalState();
+    });
+    _refreshBannerIfVisible();
+  }
+
+  String _categoryJsonExample() {
+    return jsonEncode(<Map<String, dynamic>>[
+      <String, dynamic>{
+        'name': 'Viral Reactions',
+        'items': <String>['this edit is insane', 'clean transitions', 'deserved viral'],
+      },
+      <String, dynamic>{
+        'name': 'Support',
+        'items': <String>['keep going', 'you are improving fast'],
+      },
+    ]);
+  }
+
+  void _copyCategoryJsonExample() {
+    Clipboard.setData(ClipboardData(text: _categoryJsonExample()));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('JSON example copied')),
+    );
+  }
+
+  void _addStaticCategoriesFromJson() {
+    final String raw = _categoryJsonController.text.trim();
+    if (raw.isEmpty) return;
+
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return;
+
+      final List<StaticCategory> parsed = <StaticCategory>[];
+      for (final item in decoded) {
+        if (item is! Map) continue;
+        final String name = (item['name'] ?? '').toString().trim();
+        final dynamic itemsRaw = item['items'];
+        if (name.isEmpty || itemsRaw is! List) continue;
+        final List<String> items = itemsRaw
+            .map((dynamic e) => e.toString().trim())
+            .where((String e) => e.isNotEmpty)
+            .toList();
+        if (items.isEmpty) continue;
+        parsed.add(StaticCategory(name: name, items: items));
+      }
+
+      if (parsed.isEmpty) return;
+      setState(() {
+        _staticCategories.addAll(parsed);
+        _categoryJsonController.clear();
+        _saveLocalState();
+      });
+      _refreshBannerIfVisible();
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Invalid JSON format')),
+      );
+    }
+  }
+
+  void _removeStaticCategory(int index) {
+    setState(() {
+      _staticCategories.removeAt(index);
+      _saveLocalState();
+    });
+    _refreshBannerIfVisible();
   }
 
   Future<void> _openLogsPage() async {
@@ -280,6 +398,10 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
+    final pages = <Widget>[
+      _buildControlsPage(context),
+      _buildCategoriesPage(context),
+    ];
     return Scaffold(
       appBar: AppBar(
         title: const Text('Quick Text Banner'),
@@ -291,7 +413,22 @@ class _HomePageState extends State<HomePage> {
           ),
         ],
       ),
-      body: SingleChildScrollView(
+      body: pages[_pageIndex],
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _pageIndex,
+        onDestinationSelected: (int index) {
+          setState(() => _pageIndex = index);
+        },
+        destinations: const <NavigationDestination>[
+          NavigationDestination(icon: Icon(Icons.tune), label: 'Controls'),
+          NavigationDestination(icon: Icon(Icons.category), label: 'Categories'),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildControlsPage(BuildContext context) {
+    return SingleChildScrollView(
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(
@@ -329,6 +466,13 @@ class _HomePageState extends State<HomePage> {
                   _setAutoBannerEnabled(value);
                 },
               ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Assistant ON/OFF'),
+                subtitle: const Text('ON: banner + floating button. OFF: hide both.'),
+                value: _assistantOn,
+                onChanged: _setAssistantEnabled,
+              ),
               const SizedBox(height: 12),
               TextField(
                 controller: _aiExtraPromptController,
@@ -340,18 +484,28 @@ class _HomePageState extends State<HomePage> {
               ),
               const SizedBox(height: 12),
               TextField(
-                controller: _inputController,
-                decoration: InputDecoration(
-                  labelText: 'Add texts (comma-separated)',
-                  hintText: 'text1, text2, text3',
-                  suffixIcon: IconButton(
-                    onPressed: _addTextsFromInput,
-                    icon: const Icon(Icons.add),
-                  ),
+                controller: _customNameController,
+                decoration: const InputDecoration(
+                  labelText: 'Button name',
+                  hintText: 'e.g. Product CTA',
                 ),
-                onSubmitted: (_) => _addTextsFromInput(),
               ),
               const SizedBox(height: 8),
+              TextField(
+                controller: _customPromptController,
+                decoration: const InputDecoration(
+                  labelText: 'Button prompt',
+                  hintText: 'e.g. complete draft to push my product benefit',
+                ),
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton(
+                  onPressed: _addCustomAction,
+                  child: const Text('Add Custom Button'),
+                ),
+              ),
               Row(
                 children: <Widget>[
                   const Text('Rows:'),
@@ -458,39 +612,108 @@ class _HomePageState extends State<HomePage> {
                   ),
                 );
               }),
-              const SizedBox(height: 6),
-              const SizedBox(height: 6),
-              ..._texts.asMap().entries.map((entry) {
-                final int index = entry.key;
-                final String text = entry.value;
-                return Card(
-                  child: ListTile(
-                    dense: true,
-                    title: Text(text),
-                    trailing: IconButton(
-                      onPressed: () => _removeAt(index),
-                      icon: const Icon(Icons.delete_outline),
-                    ),
-                  ),
-                );
-              }),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton(
-                  onPressed: _toggleBanner,
-                  child: Text(_overlayOn ? 'Hide Banner' : 'Show Banner'),
-                ),
-              ),
-              const SizedBox(height: 8),
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton(
-                  onPressed: _toggleFloatingButton,
-                  child: Text(_toggleOn ? 'Hide Floating Button' : 'Show Floating Button'),
-                ),
-              ),
             ],
           ),
+        ),
+      );
+  }
+
+  Widget _buildCategoriesPage(BuildContext context) {
+    return SingleChildScrollView(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Text('Static Comment Categories', style: Theme.of(context).textTheme.titleSmall),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _categoryNameController,
+              decoration: const InputDecoration(
+                labelText: 'Category name',
+                hintText: 'e.g. Viral Reactions',
+              ),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: _categoryItemsController,
+              decoration: const InputDecoration(
+                labelText: 'Comma-separated comments',
+                hintText: 'wow edit, this is clean, insane transitions',
+              ),
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton(
+                onPressed: _addStaticCategory,
+                child: const Text('Add Static Category'),
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _categoryJsonController,
+              minLines: 4,
+              maxLines: 8,
+              decoration: const InputDecoration(
+                labelText: 'Bulk categories JSON',
+                hintText: '[{"name":"Category","items":["item1","item2"]}]',
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: _copyCategoryJsonExample,
+                    child: const Text('Copy JSON Example'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: _addStaticCategoriesFromJson,
+                    child: const Text('Add From JSON'),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _categoryBulkController,
+              decoration: const InputDecoration(
+                labelText: 'Bulk categories',
+                hintText: 'cat1:item1,item2,cat2:item3,item4',
+              ),
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton(
+                onPressed: _addStaticCategoriesFromBulk,
+                child: const Text('Add Bulk Categories'),
+              ),
+            ),
+            ..._staticCategories.asMap().entries.map((entry) {
+              final int index = entry.key;
+              final StaticCategory category = entry.value;
+              return Card(
+                child: ListTile(
+                  dense: true,
+                  title: Text(category.name),
+                  subtitle: Text(
+                    category.items.join(', '),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  trailing: IconButton(
+                    onPressed: () => _removeStaticCategory(index),
+                    icon: const Icon(Icons.delete_outline),
+                  ),
+                ),
+              );
+            }),
+          ],
         ),
       ),
     );

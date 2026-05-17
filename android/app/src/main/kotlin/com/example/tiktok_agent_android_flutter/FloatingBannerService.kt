@@ -9,6 +9,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.text.TextUtils
+import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
@@ -21,6 +22,8 @@ import android.widget.Toast
 import kotlin.math.ceil
 
 class FloatingBannerService : Service() {
+    private data class StaticCategory(val name: String, val items: List<String>)
+
     private var windowManager: WindowManager? = null
     private var rootView: View? = null
     private var statusView: TextView? = null
@@ -30,6 +33,7 @@ class FloatingBannerService : Service() {
     private var userPrompt: String = ""
     private var platform: String = "TikTok"
     private var customActions: List<Pair<String, String>> = emptyList()
+    private var staticCategories: List<StaticCategory> = emptyList()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -46,6 +50,18 @@ class FloatingBannerService : Service() {
                     val parts = line.split("\t", limit = 2)
                     if (parts.size == 2 && parts[0].isNotBlank() && parts[1].isNotBlank()) parts[0] to parts[1] else null
                 }
+                val rawStaticCategories = intent.getStringArrayListExtra(EXTRA_STATIC_CATEGORIES) ?: arrayListOf()
+                staticCategories = rawStaticCategories.mapNotNull { line ->
+                    val parts = line.split("\t", limit = 2)
+                    if (parts.size != 2 || parts[0].isBlank()) return@mapNotNull null
+                    val items = parts[1]
+                        .split("\u0001")
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                    if (items.isEmpty()) return@mapNotNull null
+                    StaticCategory(parts[0].trim(), items)
+                }
+                Log.d("FloatingBannerService", "ACTION_SHOW categories=${staticCategories.size}")
                 showOverlay(texts, rows, compactMode)
             }
 
@@ -69,9 +85,13 @@ class FloatingBannerService : Service() {
         lastUserPrompt = userPrompt
         lastPlatform = platform
         lastCustomActions = customActions.map { "${it.first}\t${it.second}" }
+        lastStaticCategories = staticCategories.map { "${it.name}\t${it.items.joinToString("\u0001")}" }
 
         hideOverlay()
-        if (texts.isEmpty()) return
+        if (staticCategories.isEmpty()) {
+            Log.d("FloatingBannerService", "showOverlay skipped: no categories")
+            return
+        }
 
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         val displayWidth = resources.displayMetrics.widthPixels
@@ -140,6 +160,12 @@ class FloatingBannerService : Service() {
             isHorizontalScrollBarEnabled = true
             overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
         }
+        val categoryScroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = true
+            overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+        }
+        val categoryRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val staticContentContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
         val rowViews = (0 until rows).map {
             LinearLayout(this).apply {
@@ -158,43 +184,80 @@ class FloatingBannerService : Service() {
             rowViews.forEach { addView(it) }
         }
 
-        val columns = ceil(texts.size / rows.toDouble()).toInt().coerceAtLeast(1)
-        for (col in 0 until columns) {
-            for (row in 0 until rows) {
-                val idx = col * rows + row
-                if (idx >= texts.size) continue
-                val text = texts[idx]
-                val chip = TextView(this).apply {
-                    this.text = text
-                    setTextColor(Color.WHITE)
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-                    setPadding(14, 8, 14, 8)
-                    setBackgroundColor(Color.parseColor("#2E7D32"))
-                    val lp = LinearLayout.LayoutParams(
-                        if (compactMode) compactWidth else LinearLayout.LayoutParams.WRAP_CONTENT,
-                        LinearLayout.LayoutParams.WRAP_CONTENT
-                    )
-                    lp.marginEnd = 6
-                    layoutParams = lp
-                    if (compactMode) {
-                        maxLines = 1
-                        ellipsize = TextUtils.TruncateAt.END
+        fun populateStaticTextRows(items: List<String>) {
+            rowViews.forEach { it.removeAllViews() }
+            val columns = ceil(items.size / rows.toDouble()).toInt().coerceAtLeast(1)
+            for (col in 0 until columns) {
+                for (row in 0 until rows) {
+                    val idx = col * rows + row
+                    if (idx >= items.size) continue
+                    val text = items[idx]
+                    val chip = TextView(this).apply {
+                        this.text = text
+                        setTextColor(Color.WHITE)
+                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+                        setPadding(14, 8, 14, 8)
+                        setBackgroundColor(Color.parseColor("#2E7D32"))
+                        val lp = LinearLayout.LayoutParams(
+                            if (compactMode) compactWidth else LinearLayout.LayoutParams.WRAP_CONTENT,
+                            LinearLayout.LayoutParams.WRAP_CONTENT
+                        )
+                        lp.marginEnd = 6
+                        layoutParams = lp
+                        if (compactMode) {
+                            maxLines = 1
+                            ellipsize = TextUtils.TruncateAt.END
+                        }
+                        setOnClickListener {
+                            TextInjectorAccessibilityService.injectText(text)
+                        }
+                        setOnLongClickListener {
+                            hideOverlay()
+                            stopSelf()
+                            true
+                        }
                     }
-                    setOnClickListener {
-                        TextInjectorAccessibilityService.injectText(text)
-                    }
-                    setOnLongClickListener {
-                        hideOverlay()
-                        stopSelf()
-                        true
-                    }
+                    rowViews[row].addView(chip)
                 }
-                rowViews[row].addView(chip)
             }
         }
 
+        if (staticCategories.isNotEmpty()) {
+            var selectedCategoryIndex = 0
+            val categoryChips = mutableListOf<TextView>()
+            fun refreshCategorySelection() {
+                categoryChips.forEachIndexed { index, chip ->
+                    if (index == selectedCategoryIndex) {
+                        chip.setBackgroundColor(Color.parseColor("#0D47A1"))
+                    } else {
+                        chip.setBackgroundColor(Color.parseColor("#546E7A"))
+                    }
+                }
+            }
+            staticCategories.forEachIndexed { index, category ->
+                val categoryChip = createActionChip("📁 ${category.name}") {
+                    selectedCategoryIndex = index
+                    refreshCategorySelection()
+                    populateStaticTextRows(category.items)
+                }
+                categoryChips.add(categoryChip)
+                categoryRow.addView(categoryChip)
+            }
+            refreshCategorySelection()
+            categoryScroll.addView(categoryRow)
+            val lp = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            lp.bottomMargin = 8
+            categoryScroll.layoutParams = lp
+            container.addView(categoryScroll)
+            populateStaticTextRows(staticCategories.first().items)
+        }
+
         horizontalScroll.addView(contentColumn)
-        container.addView(horizontalScroll)
+        staticContentContainer.addView(horizontalScroll)
+        container.addView(staticContentContainer)
         rootScroll.addView(container)
 
         val params = WindowManager.LayoutParams(
@@ -425,6 +488,7 @@ class FloatingBannerService : Service() {
         var lastUserPrompt: String = ""
         var lastPlatform: String = "TikTok"
         var lastCustomActions: List<String> = emptyList()
+        var lastStaticCategories: List<String> = emptyList()
 
         fun isVisible(): Boolean = visible
 
@@ -436,5 +500,6 @@ class FloatingBannerService : Service() {
         const val EXTRA_USER_PROMPT = "userPrompt"
         const val EXTRA_PLATFORM = "platform"
         const val EXTRA_CUSTOM_ACTIONS = "customActions"
+        const val EXTRA_STATIC_CATEGORIES = "staticCategories"
     }
 }
