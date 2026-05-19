@@ -267,7 +267,10 @@ class TextInjectorAccessibilityService : AccessibilityService() {
             val sample = if (context.length > 300) context.substring(0, 300) + "..." else context
             Log.d(TAG, "Visible text sample=\n$sample")
         }
-        if (context.isEmpty()) return null
+        if (context.isEmpty()) {
+            setLastFailure("No visible screen text found")
+            return null
+        }
 
         val prompt = """
 You are writing one short reply.
@@ -296,55 +299,83 @@ $context
         }
         Log.d(TAG, "OpenRouter request body=\n${body}")
 
-        val conn = (URL("https://openrouter.ai/api/v1/chat/completions").openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 20000
-            readTimeout = 30000
-            doOutput = true
-            setRequestProperty("Authorization", "Bearer $apiKey")
-            setRequestProperty("Content-Type", "application/json")
+        return try {
+            val conn = (URL("https://openrouter.ai/api/v1/chat/completions").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 20000
+                readTimeout = 30000
+                doOutput = true
+                setRequestProperty("Authorization", "Bearer $apiKey")
+                setRequestProperty("Content-Type", "application/json")
+            }
+
+            OutputStreamWriter(conn.outputStream).use { it.write(body.toString()) }
+
+            val statusCode = conn.responseCode
+            val stream = if (statusCode in 200..299) conn.inputStream else conn.errorStream
+            val raw = BufferedReader(stream.reader()).use { it.readText() }
+            Log.d(TAG, "OpenRouter status=$statusCode")
+            Log.d(TAG, "OpenRouter response=\n$raw")
+
+            appendApiLog(JSONObject().apply {
+                put("time", nowTs())
+                put("status", statusCode)
+                put("instruction", instruction)
+                put("visibleTextChars", context.length)
+                put("visibleTextSample", if (context.length > 600) context.substring(0, 600) + "..." else context)
+                put("requestBody", body)
+                put("responseBody", raw)
+            })
+
+            if (statusCode !in 200..299) {
+                setLastFailure("OpenRouter HTTP $statusCode")
+                return null
+            }
+
+            val json = JSONObject(raw)
+            val choices = json.optJSONArray("choices") ?: run {
+                setLastFailure("OpenRouter response missing choices")
+                return null
+            }
+            if (choices.length() == 0) {
+                setLastFailure("OpenRouter response has empty choices")
+                return null
+            }
+            val message = choices.getJSONObject(0).optJSONObject("message") ?: run {
+                setLastFailure("OpenRouter response missing message")
+                return null
+            }
+            val content = message.optString("content").trim()
+            if (content.isNotEmpty()) return content
+
+            val reasoning = message.optString("reasoning").trim()
+            if (reasoning.isNotEmpty()) {
+                val cleaned = reasoning.lines().firstOrNull { it.trim().isNotEmpty() }?.trim().orEmpty()
+                if (cleaned.isNotEmpty()) return cleaned
+            }
+
+            val details = message.optJSONArray("reasoning_details")
+            if (details != null && details.length() > 0) {
+                val first = details.optJSONObject(0)?.optString("text")?.trim().orEmpty()
+                if (first.isNotEmpty()) return first
+            }
+
+            setLastFailure("OpenRouter response had no usable text")
+            null
+        } catch (e: Exception) {
+            Log.e(TAG, "OpenRouter call failed", e)
+            setLastFailure("${e.javaClass.simpleName}: ${e.message ?: "network failure"}")
+            appendApiLog(JSONObject().apply {
+                put("time", nowTs())
+                put("status", -1)
+                put("instruction", instruction)
+                put("visibleTextChars", context.length)
+                put("visibleTextSample", if (context.length > 600) context.substring(0, 600) + "..." else context)
+                put("requestBody", body)
+                put("error", "${e.javaClass.name}: ${e.message ?: "unknown"}")
+            })
+            null
         }
-
-        OutputStreamWriter(conn.outputStream).use { it.write(body.toString()) }
-
-        val statusCode = conn.responseCode
-        val stream = if (statusCode in 200..299) conn.inputStream else conn.errorStream
-        val raw = BufferedReader(stream.reader()).use { it.readText() }
-        Log.d(TAG, "OpenRouter status=$statusCode")
-        Log.d(TAG, "OpenRouter response=\n$raw")
-
-        appendApiLog(JSONObject().apply {
-            put("time", nowTs())
-            put("status", statusCode)
-            put("instruction", instruction)
-            put("visibleTextChars", context.length)
-            put("visibleTextSample", if (context.length > 600) context.substring(0, 600) + "..." else context)
-            put("requestBody", body)
-            put("responseBody", raw)
-        })
-
-        if (statusCode !in 200..299) return null
-
-        val json = JSONObject(raw)
-        val choices = json.optJSONArray("choices") ?: return null
-        if (choices.length() == 0) return null
-        val message = choices.getJSONObject(0).optJSONObject("message") ?: return null
-        val content = message.optString("content").trim()
-        if (content.isNotEmpty()) return content
-
-        val reasoning = message.optString("reasoning").trim()
-        if (reasoning.isNotEmpty()) {
-            val cleaned = reasoning.lines().firstOrNull { it.trim().isNotEmpty() }?.trim().orEmpty()
-            if (cleaned.isNotEmpty()) return cleaned
-        }
-
-        val details = message.optJSONArray("reasoning_details")
-        if (details != null && details.length() > 0) {
-            val first = details.optJSONObject(0)?.optString("text")?.trim().orEmpty()
-            if (first.isNotEmpty()) return first
-        }
-
-        return null
     }
 
 
@@ -376,6 +407,13 @@ $context
         private var instance: TextInjectorAccessibilityService? = null
 
         private const val TAG = "QuickTextAI"
+        @Volatile
+        private var lastFailureReason: String = ""
+
+        private fun setLastFailure(reason: String) {
+            lastFailureReason = reason
+            Log.w(TAG, "AI failure reason: $reason")
+        }
 
         fun isEnabled(): Boolean = instance != null
 
@@ -389,26 +427,33 @@ $context
 
         fun generateAiReplyAndInject(instruction: String): Boolean {
             val svc = instance ?: return false
-            val apiKey = svc.getSharedPreferences("quick_text_settings", MODE_PRIVATE)
-                .getString("openrouter_api_key", "")
-                .orEmpty()
-                .trim()
-            if (apiKey.isBlank()) return false
+            val apiKey = resolveApiKey(svc)
+            if (apiKey.isBlank()) {
+                setLastFailure("OpenRouter API key is empty (settings + debug fallback)")
+                return false
+            }
             Log.d(TAG, "Instruction= $instruction")
             val reply = svc.generateReplyFromOpenRouter(apiKey, instruction) ?: return false
             Log.d(TAG, "Generated reply= $reply")
-            return svc.setText(reply)
+            val injected = svc.setText(reply)
+            if (!injected) {
+                setLastFailure("Could not inject generated text into input field")
+            }
+            return injected
         }
 
         fun generateCompletionFromActiveInputAndInject(extraUserPrompt: String): Boolean {
             val svc = instance ?: return false
-            val apiKey = svc.getSharedPreferences("quick_text_settings", MODE_PRIVATE)
-                .getString("openrouter_api_key", "")
-                .orEmpty()
-                .trim()
-            if (apiKey.isBlank()) return false
+            val apiKey = resolveApiKey(svc)
+            if (apiKey.isBlank()) {
+                setLastFailure("OpenRouter API key is empty (settings + debug fallback)")
+                return false
+            }
             val draft = svc.getFocusedOrFirstEditableText()
-            if (draft.isBlank()) return false
+            if (draft.isBlank()) {
+                setLastFailure("No draft text found in active input")
+                return false
+            }
 
             val instruction = buildString {
                 append("Complete this draft reply naturally. Keep original meaning and tone, just improve and finish it. No extra style. No emojis unless already present in draft.\n\n")
@@ -423,7 +468,26 @@ $context
             Log.d(TAG, "Draft completion instruction= $instruction")
             val reply = svc.generateReplyFromOpenRouter(apiKey, instruction) ?: return false
             Log.d(TAG, "Draft completion generated= $reply")
-            return svc.setText(reply)
+            val injected = svc.setText(reply)
+            if (!injected) {
+                setLastFailure("Could not inject completed text into input field")
+            }
+            return injected
+        }
+
+        fun getLastFailureReason(): String = lastFailureReason
+
+        private fun resolveApiKey(svc: TextInjectorAccessibilityService): String {
+            val prefsKey = svc.getSharedPreferences("quick_text_settings", MODE_PRIVATE)
+                .getString("openrouter_api_key", "")
+                .orEmpty()
+                .trim()
+            if (prefsKey.isNotBlank()) return prefsKey
+            if (BuildConfig.DEBUG) {
+                val debugKey = BuildConfig.OPENROUTER_DEBUG_KEY.trim()
+                if (debugKey.isNotBlank()) return debugKey
+            }
+            return ""
         }
     }
 }

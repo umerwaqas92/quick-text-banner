@@ -425,9 +425,10 @@ class FloatingBannerService : Service() {
             }
             setChipsEnabled(true)
             Handler(Looper.getMainLooper()).post {
+                val reason = TextInjectorAccessibilityService.getLastFailureReason()
                 Toast.makeText(
                     this,
-                    if (ok) "Reply completed" else "No draft input found or AI failed",
+                    if (ok) "Reply completed" else if (reason.isNotBlank()) reason else "No draft input found or AI failed",
                     Toast.LENGTH_SHORT
                 ).show()
             }
@@ -460,9 +461,10 @@ class FloatingBannerService : Service() {
             }
             setChipsEnabled(true)
             Handler(Looper.getMainLooper()).post {
+                val reason = TextInjectorAccessibilityService.getLastFailureReason()
                 Toast.makeText(
                     this,
-                    if (ok) "Custom completion done" else "No draft input found or AI failed",
+                    if (ok) "Custom completion done" else if (reason.isNotBlank()) reason else "No draft input found or AI failed",
                     Toast.LENGTH_SHORT
                 ).show()
             }
@@ -490,9 +492,10 @@ class FloatingBannerService : Service() {
             }
             setChipsEnabled(true)
             Handler(Looper.getMainLooper()).post {
+                val reason = TextInjectorAccessibilityService.getLastFailureReason()
                 Toast.makeText(
                     this,
-                    if (ok) "AI reply inserted" else "AI reply failed",
+                    if (ok) "AI reply inserted" else if (reason.isNotBlank()) reason else "AI reply failed",
                     Toast.LENGTH_SHORT
                 ).show()
             }

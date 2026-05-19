@@ -180,12 +180,30 @@ class MainActivity : FlutterActivity() {
 
 
     private fun isAccessibilityServiceEnabled(): Boolean {
-        val expected = ComponentName(this, TextInjectorAccessibilityService::class.java).flattenToString()
+        val globallyEnabled = Settings.Secure.getInt(
+            contentResolver,
+            Settings.Secure.ACCESSIBILITY_ENABLED,
+            0
+        ) == 1
+        if (!globallyEnabled) return false
+
+        val expected = ComponentName(this, TextInjectorAccessibilityService::class.java)
+        val expectedFlat = expected.flattenToString()
         val enabled = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
             ?: return false
         return TextUtils.SimpleStringSplitter(':').run {
             setString(enabled)
-            any { it.equals(expected, ignoreCase = true) }
+            any { raw ->
+                val candidate = ComponentName.unflattenFromString(raw) ?: return@any false
+                val className = candidate.className
+                val normalizedClass = if (className.startsWith(".")) {
+                    candidate.packageName + className
+                } else {
+                    className
+                }
+                val normalized = ComponentName(candidate.packageName, normalizedClass).flattenToString()
+                normalized.equals(expectedFlat, ignoreCase = true)
+            }
         }
     }
 

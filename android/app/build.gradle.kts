@@ -28,6 +28,17 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        val debugOpenRouterKey = (project.findProperty("OPENROUTER_DEBUG_KEY") as String?)
+            ?.trim()
+            .orEmpty()
+            .replace("\\", "\\\\")
+            .replace("\"", "\\\"")
+        buildConfigField("String", "OPENROUTER_DEBUG_KEY", "\"$debugOpenRouterKey\"")
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     buildTypes {
