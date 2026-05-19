@@ -41,10 +41,22 @@ class MainActivity : FlutterActivity() {
                         val platform = call.argument<String>("platform") ?: "TikTok"
                         val aiChipsEnabled = call.argument<Boolean>("aiChipsEnabled") ?: true
                         val categoryRows = call.argument<Int>("categoryRows") ?: 1
+                        val apiKey = call.argument<String>("apiKey") ?: ""
                         @Suppress("UNCHECKED_CAST")
                         val customActions = call.argument<List<String>>("customActions") ?: emptyList()
                         @Suppress("UNCHECKED_CAST")
                         val staticCategories = call.argument<List<String>>("staticCategories") ?: emptyList()
+                        persistRuntimeSettings(
+                            rows = rows,
+                            compactMode = compactMode,
+                            userPrompt = userPrompt,
+                            platform = platform,
+                            aiChipsEnabled = aiChipsEnabled,
+                            categoryRows = categoryRows,
+                            apiKey = apiKey,
+                            customActions = customActions,
+                            staticCategories = staticCategories
+                        )
                         val intent = Intent(this, FloatingBannerService::class.java).apply {
                             action = FloatingBannerService.ACTION_SHOW
                             putStringArrayListExtra(FloatingBannerService.EXTRA_TEXTS, ArrayList(texts))
@@ -58,6 +70,32 @@ class MainActivity : FlutterActivity() {
                             putStringArrayListExtra(FloatingBannerService.EXTRA_STATIC_CATEGORIES, ArrayList(staticCategories))
                         }
                         startService(intent)
+                        result.success(true)
+                    }
+
+                    "syncRuntimeSettings" -> {
+                        val rows = call.argument<Int>("rows") ?: 2
+                        val compactMode = call.argument<Boolean>("compactMode") ?: false
+                        val userPrompt = call.argument<String>("userPrompt") ?: ""
+                        val platform = call.argument<String>("platform") ?: "TikTok"
+                        val aiChipsEnabled = call.argument<Boolean>("aiChipsEnabled") ?: true
+                        val categoryRows = call.argument<Int>("categoryRows") ?: 1
+                        val apiKey = call.argument<String>("apiKey") ?: ""
+                        @Suppress("UNCHECKED_CAST")
+                        val customActions = call.argument<List<String>>("customActions") ?: emptyList()
+                        @Suppress("UNCHECKED_CAST")
+                        val staticCategories = call.argument<List<String>>("staticCategories") ?: emptyList()
+                        persistRuntimeSettings(
+                            rows = rows,
+                            compactMode = compactMode,
+                            userPrompt = userPrompt,
+                            platform = platform,
+                            aiChipsEnabled = aiChipsEnabled,
+                            categoryRows = categoryRows,
+                            apiKey = apiKey,
+                            customActions = customActions,
+                            staticCategories = staticCategories
+                        )
                         result.success(true)
                     }
 
@@ -164,5 +202,30 @@ class MainActivity : FlutterActivity() {
             val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
             startActivity(intent)
         }
+    }
+
+    private fun persistRuntimeSettings(
+        rows: Int,
+        compactMode: Boolean,
+        userPrompt: String,
+        platform: String,
+        aiChipsEnabled: Boolean,
+        categoryRows: Int,
+        apiKey: String,
+        customActions: List<String>,
+        staticCategories: List<String>
+    ) {
+        val prefs = getSharedPreferences("quick_text_settings", MODE_PRIVATE)
+        prefs.edit()
+            .putInt("rows", rows.coerceIn(1, 4))
+            .putBoolean("compact_mode", compactMode)
+            .putString("extra_prompt", userPrompt.trim())
+            .putString("platform", platform)
+            .putBoolean("ai_chips_enabled", aiChipsEnabled)
+            .putInt("category_rows", categoryRows.coerceIn(1, 3))
+            .putString("openrouter_api_key", apiKey.trim())
+            .putStringSet("custom_actions", customActions.toSet())
+            .putStringSet("static_categories", staticCategories.toSet())
+            .apply()
     }
 }

@@ -33,6 +33,7 @@ class TextInjectorAccessibilityService : AccessibilityService() {
     private var pendingHideRunnable: Runnable? = null
     private var lastInputTriggerAt: Long = 0L
     private var lastEditableDetectedAt: Long = 0L
+    private var lastShowAttemptAt: Long = 0L
     private var lastPackage: String = ""
     override fun onServiceConnected() {
         instance = this
@@ -80,17 +81,54 @@ class TextInjectorAccessibilityService : AccessibilityService() {
             pendingHideRunnable = null
 
             if (!FloatingBannerService.isVisible()) {
+                val now = System.currentTimeMillis()
+                if (now - lastShowAttemptAt < 350) {
+                    return
+                }
+                lastShowAttemptAt = now
+
+                val prefs = getSharedPreferences("quick_text_settings", MODE_PRIVATE)
+                val savedRows = prefs.getInt("rows", 2).coerceIn(1, 4)
+                val savedCompact = prefs.getBoolean("compact_mode", false)
+                val savedPrompt = prefs.getString("extra_prompt", "").orEmpty()
+                val savedPlatform = prefs.getString("platform", "TikTok").orEmpty()
+                val savedCustom = prefs.getStringSet("custom_actions", emptySet())?.toList() ?: emptyList()
+                val savedStatic = prefs.getStringSet("static_categories", emptySet())?.toList() ?: emptyList()
+
+                val staticCategories = if (FloatingBannerService.lastStaticCategories.isNotEmpty()) {
+                    FloatingBannerService.lastStaticCategories
+                } else {
+                    savedStatic
+                }
+                if (staticCategories.isEmpty()) {
+                    return
+                }
+                val customActions = if (FloatingBannerService.lastCustomActions.isNotEmpty()) {
+                    FloatingBannerService.lastCustomActions
+                } else {
+                    savedCustom
+                }
+
                 val i = Intent(this, FloatingBannerService::class.java).apply {
                     action = FloatingBannerService.ACTION_SHOW
                     putStringArrayListExtra(FloatingBannerService.EXTRA_TEXTS, ArrayList(FloatingBannerService.lastTexts))
-                    putExtra(FloatingBannerService.EXTRA_ROWS, FloatingBannerService.lastRows)
-                    putExtra(FloatingBannerService.EXTRA_COMPACT_MODE, FloatingBannerService.lastCompactMode)
-                    putExtra(FloatingBannerService.EXTRA_USER_PROMPT, FloatingBannerService.lastUserPrompt)
-                    putExtra(FloatingBannerService.EXTRA_PLATFORM, FloatingBannerService.lastPlatform)
+                    putExtra(FloatingBannerService.EXTRA_ROWS, if (FloatingBannerService.lastRows > 0) FloatingBannerService.lastRows else savedRows)
+                    putExtra(
+                        FloatingBannerService.EXTRA_COMPACT_MODE,
+                        if (FloatingBannerService.lastRows > 0) FloatingBannerService.lastCompactMode else savedCompact
+                    )
+                    putExtra(
+                        FloatingBannerService.EXTRA_USER_PROMPT,
+                        if (FloatingBannerService.lastUserPrompt.isNotBlank()) FloatingBannerService.lastUserPrompt else savedPrompt
+                    )
+                    putExtra(
+                        FloatingBannerService.EXTRA_PLATFORM,
+                        if (FloatingBannerService.lastPlatform.isNotBlank()) FloatingBannerService.lastPlatform else savedPlatform
+                    )
                     putExtra(FloatingBannerService.EXTRA_AI_CHIPS_ENABLED, FloatingBannerService.lastAiChipsEnabled)
                     putExtra(FloatingBannerService.EXTRA_CATEGORY_ROWS, FloatingBannerService.lastCategoryRows)
-                    putStringArrayListExtra(FloatingBannerService.EXTRA_CUSTOM_ACTIONS, ArrayList(FloatingBannerService.lastCustomActions))
-                    putStringArrayListExtra(FloatingBannerService.EXTRA_STATIC_CATEGORIES, ArrayList(FloatingBannerService.lastStaticCategories))
+                    putStringArrayListExtra(FloatingBannerService.EXTRA_CUSTOM_ACTIONS, ArrayList(customActions))
+                    putStringArrayListExtra(FloatingBannerService.EXTRA_STATIC_CATEGORIES, ArrayList(staticCategories))
                 }
                 startService(i)
             }
@@ -337,7 +375,6 @@ $context
         @Volatile
         private var instance: TextInjectorAccessibilityService? = null
 
-        private const val HARD_CODED_OPENROUTER_KEY = ""
         private const val TAG = "QuickTextAI"
 
         fun isEnabled(): Boolean = instance != null
@@ -352,16 +389,24 @@ $context
 
         fun generateAiReplyAndInject(instruction: String): Boolean {
             val svc = instance ?: return false
-            if (HARD_CODED_OPENROUTER_KEY.isBlank()) return false
+            val apiKey = svc.getSharedPreferences("quick_text_settings", MODE_PRIVATE)
+                .getString("openrouter_api_key", "")
+                .orEmpty()
+                .trim()
+            if (apiKey.isBlank()) return false
             Log.d(TAG, "Instruction= $instruction")
-            val reply = svc.generateReplyFromOpenRouter(HARD_CODED_OPENROUTER_KEY, instruction) ?: return false
+            val reply = svc.generateReplyFromOpenRouter(apiKey, instruction) ?: return false
             Log.d(TAG, "Generated reply= $reply")
             return svc.setText(reply)
         }
 
         fun generateCompletionFromActiveInputAndInject(extraUserPrompt: String): Boolean {
             val svc = instance ?: return false
-            if (HARD_CODED_OPENROUTER_KEY.isBlank()) return false
+            val apiKey = svc.getSharedPreferences("quick_text_settings", MODE_PRIVATE)
+                .getString("openrouter_api_key", "")
+                .orEmpty()
+                .trim()
+            if (apiKey.isBlank()) return false
             val draft = svc.getFocusedOrFirstEditableText()
             if (draft.isBlank()) return false
 
@@ -376,7 +421,7 @@ $context
             }
 
             Log.d(TAG, "Draft completion instruction= $instruction")
-            val reply = svc.generateReplyFromOpenRouter(HARD_CODED_OPENROUTER_KEY, instruction) ?: return false
+            val reply = svc.generateReplyFromOpenRouter(apiKey, instruction) ?: return false
             Log.d(TAG, "Draft completion generated= $reply")
             return svc.setText(reply)
         }
