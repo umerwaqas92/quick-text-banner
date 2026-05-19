@@ -12,7 +12,9 @@ import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityEvent.TYPE_VIEW_FOCUSED
 import android.view.accessibility.AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED
+import android.view.accessibility.AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
 import android.view.accessibility.AccessibilityEvent.TYPE_VIEW_CLICKED
+import android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
 import android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
 import android.view.accessibility.AccessibilityNodeInfo
 import org.json.JSONArray
@@ -30,6 +32,8 @@ class TextInjectorAccessibilityService : AccessibilityService() {
     private val autoBannerHandler = Handler(Looper.getMainLooper())
     private var pendingHideRunnable: Runnable? = null
     private var lastInputTriggerAt: Long = 0L
+    private var lastEditableDetectedAt: Long = 0L
+    private var lastShowAttemptAt: Long = 0L
     private var lastPackage: String = ""
     override fun onServiceConnected() {
         instance = this
@@ -40,33 +44,18 @@ class TextInjectorAccessibilityService : AccessibilityService() {
 
         val prefs = getSharedPreferences("quick_text_settings", MODE_PRIVATE)
         val autoEnabled = prefs.getBoolean("auto_banner_enabled", false)
-        if (!autoEnabled) return
+        val assistantEnabled = prefs.getBoolean("assistant_enabled", false)
+        if (!autoEnabled || !assistantEnabled) return
 
         val type = event.eventType
         val pkg = event.packageName?.toString().orEmpty()
         if (pkg.isEmpty()) return
 
-        val supportedPackages = setOf(
-            "com.zhiliaoapp.musically", // TikTok
-            "com.twitter.android", // X
-            "com.instagram.android",
-            "com.linkedin.android"
-        )
-
-        if (pkg !in supportedPackages) {
-            // switched away from supported apps -> hide
-            if (FloatingBannerService.isVisible()) {
-                val hide = Intent(this, FloatingBannerService::class.java).apply {
-                    action = FloatingBannerService.ACTION_HIDE
-                }
-                startService(hide)
-            }
-            return
-        }
-
         if (type != TYPE_VIEW_FOCUSED &&
             type != TYPE_VIEW_TEXT_SELECTION_CHANGED &&
+            type != TYPE_VIEW_TEXT_CHANGED &&
             type != TYPE_VIEW_CLICKED &&
+            type != TYPE_WINDOW_CONTENT_CHANGED &&
             type != TYPE_WINDOW_STATE_CHANGED
         ) {
             return
@@ -81,42 +70,90 @@ class TextInjectorAccessibilityService : AccessibilityService() {
         val looksLikeInputClass = className.contains("EditText", ignoreCase = true) ||
             className.contains("TextInput", ignoreCase = true)
 
-        val triggerShow = hasEditableFocus || sourceEditable || looksLikeInputClass
+        val isTextEvent = type == TYPE_VIEW_TEXT_CHANGED || type == TYPE_VIEW_TEXT_SELECTION_CHANGED
+        val triggerShow = hasEditableFocus || sourceEditable || looksLikeInputClass || (isTextEvent && source != null)
 
         if (triggerShow) {
-            lastInputTriggerAt = System.currentTimeMillis()
+            val now = System.currentTimeMillis()
+            lastInputTriggerAt = now
+            lastEditableDetectedAt = now
             pendingHideRunnable?.let { autoBannerHandler.removeCallbacks(it) }
             pendingHideRunnable = null
 
             if (!FloatingBannerService.isVisible()) {
+                val now = System.currentTimeMillis()
+                if (now - lastShowAttemptAt < 350) {
+                    return
+                }
+                lastShowAttemptAt = now
+
+                val prefs = getSharedPreferences("quick_text_settings", MODE_PRIVATE)
+                val savedRows = prefs.getInt("rows", 2).coerceIn(1, 4)
+                val savedCompact = prefs.getBoolean("compact_mode", false)
+                val savedPrompt = prefs.getString("extra_prompt", "").orEmpty()
+                val savedPlatform = prefs.getString("platform", "TikTok").orEmpty()
+                val savedCustom = prefs.getStringSet("custom_actions", emptySet())?.toList() ?: emptyList()
+                val savedStatic = prefs.getStringSet("static_categories", emptySet())?.toList() ?: emptyList()
+
+                val staticCategories = if (FloatingBannerService.lastStaticCategories.isNotEmpty()) {
+                    FloatingBannerService.lastStaticCategories
+                } else {
+                    savedStatic
+                }
+                if (staticCategories.isEmpty()) {
+                    return
+                }
+                val customActions = if (FloatingBannerService.lastCustomActions.isNotEmpty()) {
+                    FloatingBannerService.lastCustomActions
+                } else {
+                    savedCustom
+                }
+
                 val i = Intent(this, FloatingBannerService::class.java).apply {
                     action = FloatingBannerService.ACTION_SHOW
                     putStringArrayListExtra(FloatingBannerService.EXTRA_TEXTS, ArrayList(FloatingBannerService.lastTexts))
-                    putExtra(FloatingBannerService.EXTRA_ROWS, FloatingBannerService.lastRows)
-                    putExtra(FloatingBannerService.EXTRA_COMPACT_MODE, FloatingBannerService.lastCompactMode)
-                    putExtra(FloatingBannerService.EXTRA_USER_PROMPT, FloatingBannerService.lastUserPrompt)
-                    putExtra(FloatingBannerService.EXTRA_PLATFORM, FloatingBannerService.lastPlatform)
+                    putExtra(FloatingBannerService.EXTRA_ROWS, if (FloatingBannerService.lastRows > 0) FloatingBannerService.lastRows else savedRows)
+                    putExtra(
+                        FloatingBannerService.EXTRA_COMPACT_MODE,
+                        if (FloatingBannerService.lastRows > 0) FloatingBannerService.lastCompactMode else savedCompact
+                    )
+                    putExtra(
+                        FloatingBannerService.EXTRA_USER_PROMPT,
+                        if (FloatingBannerService.lastUserPrompt.isNotBlank()) FloatingBannerService.lastUserPrompt else savedPrompt
+                    )
+                    putExtra(
+                        FloatingBannerService.EXTRA_PLATFORM,
+                        if (FloatingBannerService.lastPlatform.isNotBlank()) FloatingBannerService.lastPlatform else savedPlatform
+                    )
                     putExtra(FloatingBannerService.EXTRA_AI_CHIPS_ENABLED, FloatingBannerService.lastAiChipsEnabled)
                     putExtra(FloatingBannerService.EXTRA_CATEGORY_ROWS, FloatingBannerService.lastCategoryRows)
-                    putStringArrayListExtra(FloatingBannerService.EXTRA_CUSTOM_ACTIONS, ArrayList(FloatingBannerService.lastCustomActions))
-                    putStringArrayListExtra(FloatingBannerService.EXTRA_STATIC_CATEGORIES, ArrayList(FloatingBannerService.lastStaticCategories))
+                    putStringArrayListExtra(FloatingBannerService.EXTRA_CUSTOM_ACTIONS, ArrayList(customActions))
+                    putStringArrayListExtra(FloatingBannerService.EXTRA_STATIC_CATEGORIES, ArrayList(staticCategories))
                 }
                 startService(i)
             }
         } else {
+            if (type == TYPE_VIEW_TEXT_CHANGED) {
+                return
+            }
             pendingHideRunnable?.let { autoBannerHandler.removeCallbacks(it) }
             pendingHideRunnable = Runnable {
                 val currentFocused = rootInActiveWindow?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
                 val stillEditable = currentFocused?.isEditable == true
-                val recentlyTriggered = (System.currentTimeMillis() - lastInputTriggerAt) < 1400
-                if (!stillEditable && !recentlyTriggered && FloatingBannerService.isVisible()) {
+                val editableInTree = findFirstEditable(rootInActiveWindow) != null
+                val recentlyTriggered = (System.currentTimeMillis() - lastInputTriggerAt) < 1200
+                val recentlyEditableSeen = (System.currentTimeMillis() - lastEditableDetectedAt) < 1200
+                if ((stillEditable || editableInTree) && !recentlyTriggered) {
+                    lastEditableDetectedAt = System.currentTimeMillis()
+                }
+                if (!stillEditable && !editableInTree && !recentlyTriggered && !recentlyEditableSeen && FloatingBannerService.isVisible()) {
                     val i = Intent(this, FloatingBannerService::class.java).apply {
                         action = FloatingBannerService.ACTION_HIDE
                     }
                     startService(i)
                 }
             }
-            autoBannerHandler.postDelayed(pendingHideRunnable!!, 1200)
+            autoBannerHandler.postDelayed(pendingHideRunnable!!, 900)
         }
 
         lastPackage = pkg
@@ -230,7 +267,10 @@ class TextInjectorAccessibilityService : AccessibilityService() {
             val sample = if (context.length > 300) context.substring(0, 300) + "..." else context
             Log.d(TAG, "Visible text sample=\n$sample")
         }
-        if (context.isEmpty()) return null
+        if (context.isEmpty()) {
+            setLastFailure("No visible screen text found")
+            return null
+        }
 
         val prompt = """
 You are writing one short reply.
@@ -259,55 +299,83 @@ $context
         }
         Log.d(TAG, "OpenRouter request body=\n${body}")
 
-        val conn = (URL("https://openrouter.ai/api/v1/chat/completions").openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
-            connectTimeout = 20000
-            readTimeout = 30000
-            doOutput = true
-            setRequestProperty("Authorization", "Bearer $apiKey")
-            setRequestProperty("Content-Type", "application/json")
+        return try {
+            val conn = (URL("https://openrouter.ai/api/v1/chat/completions").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                connectTimeout = 20000
+                readTimeout = 30000
+                doOutput = true
+                setRequestProperty("Authorization", "Bearer $apiKey")
+                setRequestProperty("Content-Type", "application/json")
+            }
+
+            OutputStreamWriter(conn.outputStream).use { it.write(body.toString()) }
+
+            val statusCode = conn.responseCode
+            val stream = if (statusCode in 200..299) conn.inputStream else conn.errorStream
+            val raw = BufferedReader(stream.reader()).use { it.readText() }
+            Log.d(TAG, "OpenRouter status=$statusCode")
+            Log.d(TAG, "OpenRouter response=\n$raw")
+
+            appendApiLog(JSONObject().apply {
+                put("time", nowTs())
+                put("status", statusCode)
+                put("instruction", instruction)
+                put("visibleTextChars", context.length)
+                put("visibleTextSample", if (context.length > 600) context.substring(0, 600) + "..." else context)
+                put("requestBody", body)
+                put("responseBody", raw)
+            })
+
+            if (statusCode !in 200..299) {
+                setLastFailure("OpenRouter HTTP $statusCode")
+                return null
+            }
+
+            val json = JSONObject(raw)
+            val choices = json.optJSONArray("choices") ?: run {
+                setLastFailure("OpenRouter response missing choices")
+                return null
+            }
+            if (choices.length() == 0) {
+                setLastFailure("OpenRouter response has empty choices")
+                return null
+            }
+            val message = choices.getJSONObject(0).optJSONObject("message") ?: run {
+                setLastFailure("OpenRouter response missing message")
+                return null
+            }
+            val content = message.optString("content").trim()
+            if (content.isNotEmpty()) return content
+
+            val reasoning = message.optString("reasoning").trim()
+            if (reasoning.isNotEmpty()) {
+                val cleaned = reasoning.lines().firstOrNull { it.trim().isNotEmpty() }?.trim().orEmpty()
+                if (cleaned.isNotEmpty()) return cleaned
+            }
+
+            val details = message.optJSONArray("reasoning_details")
+            if (details != null && details.length() > 0) {
+                val first = details.optJSONObject(0)?.optString("text")?.trim().orEmpty()
+                if (first.isNotEmpty()) return first
+            }
+
+            setLastFailure("OpenRouter response had no usable text")
+            null
+        } catch (e: Exception) {
+            Log.e(TAG, "OpenRouter call failed", e)
+            setLastFailure("${e.javaClass.simpleName}: ${e.message ?: "network failure"}")
+            appendApiLog(JSONObject().apply {
+                put("time", nowTs())
+                put("status", -1)
+                put("instruction", instruction)
+                put("visibleTextChars", context.length)
+                put("visibleTextSample", if (context.length > 600) context.substring(0, 600) + "..." else context)
+                put("requestBody", body)
+                put("error", "${e.javaClass.name}: ${e.message ?: "unknown"}")
+            })
+            null
         }
-
-        OutputStreamWriter(conn.outputStream).use { it.write(body.toString()) }
-
-        val statusCode = conn.responseCode
-        val stream = if (statusCode in 200..299) conn.inputStream else conn.errorStream
-        val raw = BufferedReader(stream.reader()).use { it.readText() }
-        Log.d(TAG, "OpenRouter status=$statusCode")
-        Log.d(TAG, "OpenRouter response=\n$raw")
-
-        appendApiLog(JSONObject().apply {
-            put("time", nowTs())
-            put("status", statusCode)
-            put("instruction", instruction)
-            put("visibleTextChars", context.length)
-            put("visibleTextSample", if (context.length > 600) context.substring(0, 600) + "..." else context)
-            put("requestBody", body)
-            put("responseBody", raw)
-        })
-
-        if (statusCode !in 200..299) return null
-
-        val json = JSONObject(raw)
-        val choices = json.optJSONArray("choices") ?: return null
-        if (choices.length() == 0) return null
-        val message = choices.getJSONObject(0).optJSONObject("message") ?: return null
-        val content = message.optString("content").trim()
-        if (content.isNotEmpty()) return content
-
-        val reasoning = message.optString("reasoning").trim()
-        if (reasoning.isNotEmpty()) {
-            val cleaned = reasoning.lines().firstOrNull { it.trim().isNotEmpty() }?.trim().orEmpty()
-            if (cleaned.isNotEmpty()) return cleaned
-        }
-
-        val details = message.optJSONArray("reasoning_details")
-        if (details != null && details.length() > 0) {
-            val first = details.optJSONObject(0)?.optString("text")?.trim().orEmpty()
-            if (first.isNotEmpty()) return first
-        }
-
-        return null
     }
 
 
@@ -338,8 +406,14 @@ $context
         @Volatile
         private var instance: TextInjectorAccessibilityService? = null
 
-        private const val HARD_CODED_OPENROUTER_KEY = ""
         private const val TAG = "QuickTextAI"
+        @Volatile
+        private var lastFailureReason: String = ""
+
+        private fun setLastFailure(reason: String) {
+            lastFailureReason = reason
+            Log.w(TAG, "AI failure reason: $reason")
+        }
 
         fun isEnabled(): Boolean = instance != null
 
@@ -353,18 +427,33 @@ $context
 
         fun generateAiReplyAndInject(instruction: String): Boolean {
             val svc = instance ?: return false
-            if (HARD_CODED_OPENROUTER_KEY.isBlank()) return false
+            val apiKey = resolveApiKey(svc)
+            if (apiKey.isBlank()) {
+                setLastFailure("OpenRouter API key is empty (settings + debug fallback)")
+                return false
+            }
             Log.d(TAG, "Instruction= $instruction")
-            val reply = svc.generateReplyFromOpenRouter(HARD_CODED_OPENROUTER_KEY, instruction) ?: return false
+            val reply = svc.generateReplyFromOpenRouter(apiKey, instruction) ?: return false
             Log.d(TAG, "Generated reply= $reply")
-            return svc.setText(reply)
+            val injected = svc.setText(reply)
+            if (!injected) {
+                setLastFailure("Could not inject generated text into input field")
+            }
+            return injected
         }
 
         fun generateCompletionFromActiveInputAndInject(extraUserPrompt: String): Boolean {
             val svc = instance ?: return false
-            if (HARD_CODED_OPENROUTER_KEY.isBlank()) return false
+            val apiKey = resolveApiKey(svc)
+            if (apiKey.isBlank()) {
+                setLastFailure("OpenRouter API key is empty (settings + debug fallback)")
+                return false
+            }
             val draft = svc.getFocusedOrFirstEditableText()
-            if (draft.isBlank()) return false
+            if (draft.isBlank()) {
+                setLastFailure("No draft text found in active input")
+                return false
+            }
 
             val instruction = buildString {
                 append("Complete this draft reply naturally. Keep original meaning and tone, just improve and finish it. No extra style. No emojis unless already present in draft.\n\n")
@@ -377,9 +466,28 @@ $context
             }
 
             Log.d(TAG, "Draft completion instruction= $instruction")
-            val reply = svc.generateReplyFromOpenRouter(HARD_CODED_OPENROUTER_KEY, instruction) ?: return false
+            val reply = svc.generateReplyFromOpenRouter(apiKey, instruction) ?: return false
             Log.d(TAG, "Draft completion generated= $reply")
-            return svc.setText(reply)
+            val injected = svc.setText(reply)
+            if (!injected) {
+                setLastFailure("Could not inject completed text into input field")
+            }
+            return injected
+        }
+
+        fun getLastFailureReason(): String = lastFailureReason
+
+        private fun resolveApiKey(svc: TextInjectorAccessibilityService): String {
+            val prefsKey = svc.getSharedPreferences("quick_text_settings", MODE_PRIVATE)
+                .getString("openrouter_api_key", "")
+                .orEmpty()
+                .trim()
+            if (prefsKey.isNotBlank()) return prefsKey
+            if (BuildConfig.DEBUG) {
+                val debugKey = BuildConfig.OPENROUTER_DEBUG_KEY.trim()
+                if (debugKey.isNotBlank()) return debugKey
+            }
+            return ""
         }
     }
 }

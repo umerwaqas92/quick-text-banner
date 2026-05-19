@@ -17,6 +17,7 @@ class OverlayToggleService : Service() {
     private var windowManager: WindowManager? = null
     private var toggleView: View? = null
     private var params: WindowManager.LayoutParams? = null
+    private var lastTapAt: Long = 0L
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -44,6 +45,10 @@ class OverlayToggleService : Service() {
             setBackgroundColor(Color.parseColor("#CC1565C0"))
             setPadding(44, 32, 44, 32)
             setOnClickListener {
+                val now = System.currentTimeMillis()
+                if (now - lastTapAt < 300) return@setOnClickListener
+                lastTapAt = now
+
                 val action = if (FloatingBannerService.isVisible()) {
                     FloatingBannerService.ACTION_HIDE
                 } else {

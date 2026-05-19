@@ -57,6 +57,7 @@ class _HomePageState extends State<HomePage> {
   final TextEditingController _categoryItemsController = TextEditingController();
   final TextEditingController _categoryBulkController = TextEditingController();
   final TextEditingController _categoryJsonController = TextEditingController();
+  final TextEditingController _apiKeyController = TextEditingController();
   final List<CustomAction> _customActions = <CustomAction>[];
   final List<StaticCategory> _staticCategories = <StaticCategory>[];
   int _pageIndex = 0;
@@ -87,6 +88,7 @@ class _HomePageState extends State<HomePage> {
     final aiChipsEnabled = prefs.getBool('ai_chips_enabled') ?? true;
     final platform = prefs.getString('platform') ?? 'TikTok';
     final extraPrompt = prefs.getString('extra_prompt') ?? '';
+    final apiKey = prefs.getString('openrouter_api_key') ?? '';
     final customRaw = prefs.getStringList('custom_actions') ?? <String>[];
     final categoriesRaw = prefs.getStringList('static_categories') ?? <String>[];
     final localAuto = prefs.getBool('auto_banner_enabled_local') ?? false;
@@ -116,6 +118,7 @@ class _HomePageState extends State<HomePage> {
       _aiChipsEnabled = aiChipsEnabled;
       _platform = platform;
       _aiExtraPromptController.text = extraPrompt;
+      _apiKeyController.text = apiKey;
       _customActions
         ..clear()
         ..addAll(parsed);
@@ -124,6 +127,7 @@ class _HomePageState extends State<HomePage> {
         ..addAll(parsedCategories);
       _autoBannerEnabled = localAuto;
     });
+    await _syncNativeRuntimeSettings();
   }
 
   Future<void> _saveLocalState() async {
@@ -134,6 +138,7 @@ class _HomePageState extends State<HomePage> {
     await prefs.setBool('ai_chips_enabled', _aiChipsEnabled);
     await prefs.setString('platform', _platform);
     await prefs.setString('extra_prompt', _aiExtraPromptController.text.trim());
+    await prefs.setString('openrouter_api_key', _apiKeyController.text.trim());
     await prefs.setBool('auto_banner_enabled_local', _autoBannerEnabled);
     await prefs.setStringList(
       'custom_actions',
@@ -145,18 +150,44 @@ class _HomePageState extends State<HomePage> {
           .map((StaticCategory c) => '${c.name}\t${c.items.join('\u0001')}')
           .toList(),
     );
+    await _syncNativeRuntimeSettings();
+  }
+
+  Map<String, dynamic> _overlayPayload() {
+    return <String, dynamic>{
+      'texts': <String>[],
+      'rows': _rows,
+      'compactMode': _compactMode,
+      'userPrompt': _aiExtraPromptController.text.trim(),
+      'platform': _platform,
+      'aiChipsEnabled': _aiChipsEnabled,
+      'categoryRows': _categoryRows,
+      'apiKey': _apiKeyController.text.trim(),
+      'customActions': _customActions
+          .map((CustomAction a) => '${a.name}\t${a.prompt}')
+          .toList(),
+      'staticCategories': _staticCategories
+          .map((StaticCategory c) => '${c.name}\t${c.items.join('\u0001')}')
+          .toList(),
+    };
+  }
+
+  Future<void> _syncNativeRuntimeSettings() async {
+    await _channel.invokeMethod('syncRuntimeSettings', _overlayPayload());
   }
 
   Future<void> _refreshPermissions() async {
     final bool canOverlay = await _channel.invokeMethod<bool>('canDrawOverlays') ?? false;
     final bool accessibility = await _channel.invokeMethod<bool>('isAccessibilityEnabled') ?? false;
     final bool autoBanner = await _channel.invokeMethod<bool>('getAutoBannerEnabled') ?? false;
+    final bool assistantEnabled = await _channel.invokeMethod<bool>('getAssistantEnabled') ?? false;
 
     if (!mounted) return;
     setState(() {
       _canOverlay = canOverlay;
       _accessibilityOn = accessibility;
       _autoBannerEnabled = autoBanner;
+      _assistantOn = assistantEnabled;
     });
   }
 
@@ -169,6 +200,14 @@ class _HomePageState extends State<HomePage> {
     setState(() {
       _autoBannerEnabled = enabled;
     });
+
+    if (_assistantOn) {
+      if (enabled) {
+        await _channel.invokeMethod('hideOverlay');
+      } else {
+        await _channel.invokeMethod('showOverlay', _overlayPayload());
+      }
+    }
   }
 
   Future<void> _setAssistantEnabled(bool enabled) async {
@@ -190,26 +229,17 @@ class _HomePageState extends State<HomePage> {
       return;
     }
 
+    await _channel.invokeMethod('setAssistantEnabled', <String, dynamic>{
+      'enabled': enabled,
+    });
+
     if (enabled) {
-      if (_autoBannerEnabled) {
-        await _setAutoBannerEnabled(false);
-      }
       await _channel.invokeMethod('showToggle');
-      await _channel.invokeMethod('showOverlay', <String, dynamic>{
-        'texts': <String>[],
-        'rows': _rows,
-        'compactMode': _compactMode,
-        'userPrompt': _aiExtraPromptController.text.trim(),
-        'platform': _platform,
-        'aiChipsEnabled': _aiChipsEnabled,
-        'categoryRows': _categoryRows,
-        'customActions': _customActions
-            .map((CustomAction a) => '${a.name}\t${a.prompt}')
-            .toList(),
-        'staticCategories': _staticCategories
-            .map((StaticCategory c) => '${c.name}\t${c.items.join('\u0001')}')
-            .toList(),
-      });
+      if (_autoBannerEnabled) {
+        await _channel.invokeMethod('hideOverlay');
+      } else {
+        await _channel.invokeMethod('showOverlay', _overlayPayload());
+      }
     } else {
       await _channel.invokeMethod('hideOverlay');
       await _channel.invokeMethod('hideToggle');
@@ -227,21 +257,7 @@ class _HomePageState extends State<HomePage> {
         await _channel.invokeMethod<bool>('isBannerVisible') ?? false;
     if (!visible) return;
 
-    await _channel.invokeMethod('showOverlay', <String, dynamic>{
-      'texts': <String>[],
-      'rows': _rows,
-      'compactMode': _compactMode,
-      'userPrompt': _aiExtraPromptController.text.trim(),
-      'platform': _platform,
-      'aiChipsEnabled': _aiChipsEnabled,
-      'categoryRows': _categoryRows,
-      'customActions': _customActions
-          .map((CustomAction a) => '${a.name}\t${a.prompt}')
-          .toList(),
-      'staticCategories': _staticCategories
-          .map((StaticCategory c) => '${c.name}\t${c.items.join('\u0001')}')
-          .toList(),
-    });
+    await _channel.invokeMethod('showOverlay', _overlayPayload());
 
     if (!mounted) return;
     setState(() {
@@ -504,6 +520,15 @@ class _HomePageState extends State<HomePage> {
                 decoration: const InputDecoration(
                   labelText: 'Extra AI prompt (optional)',
                   hintText: 'e.g. how to make it?',
+                ),
+                onChanged: (_) => _saveLocalState(),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _apiKeyController,
+                decoration: const InputDecoration(
+                  labelText: 'OpenRouter API key',
+                  hintText: 'sk-or-v1-...',
                 ),
                 onChanged: (_) => _saveLocalState(),
               ),
